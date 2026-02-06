@@ -61,7 +61,7 @@ def run_cmd(cmd: list[str], cwd: str | None = None) -> tuple[int, str, str]:
 
 def download_video(youtube_url: str, work_dir: Path) -> tuple[Path, Path]:
     """Download video from YouTube and extract audio with ffmpeg"""
-    print("\n[1/6] Downloading video and extracting audio")
+    print("\n[1/6] Downloading video and extracting audio...")
 
     work_dir.mkdir(parents=True, exist_ok=True)
 
@@ -431,75 +431,69 @@ def cut_clip(
     return True
 
 
-def process_clips(
+def clip_folder_name(i: int, title: str) -> str:
+    """Generate a safe, unique folder name for a clip."""
+    safe_name = re.sub(r"[^\w\s-]", "", title).strip() or f"clip_{i + 1}"
+    return f"{i + 1:02d} - {safe_name}"
+
+
+def cut_clips(
     video_path: Path, audio_path: Path, clips: list[dict], work_dir: Path
 ) -> list[dict]:
-    """Cut clips and generate thumbnails"""
-    print("\n[4/6] Cutting clips with FFmpeg...")
-    print("[5/6] Generating thumbnails...")
+    """Cut clips from the source video."""
+    print("\n[4/6] Cutting clips...")
 
-    processed = []
     clips_dir = work_dir / "clips"
     clips_dir.mkdir(exist_ok=True)
 
     for i, clip in enumerate(clips):
-        full_title = clip["title"]
-        safe_name = re.sub(r"[^\w\s-]", "", full_title).strip() or f"clip_{i + 1}"
-        # Prefix with index to guarantee uniqueness and preserve ordering
-        safe_folder_name = f"{i + 1:02d} - {safe_name}"
+        folder = clips_dir / clip_folder_name(i, clip["title"])
+        folder.mkdir(exist_ok=True)
+        clip_path = folder / "video.mp4"
 
-        clip_folder = clips_dir / safe_folder_name
-        clip_folder.mkdir(exist_ok=True)
-
-        clip_path = clip_folder / "video.mp4"
-        thumb_path = clip_folder / "thumbnail.jpg"
-
-        # Skip if clip already fully processed
-        if clip_path.exists() and thumb_path.exists():
-            print(f"\tSkipping clip {i + 1}: {full_title} (already processed)")
+        if clip_path.exists():
+            print(f"\tSkipping clip {i + 1}: {clip['title']} (already cut)")
             clip["clip_path"] = str(clip_path)
-            clip["thumbnail_path"] = str(thumb_path)
-            processed.append(clip)
-            continue
-
-        # Cut clip - save directly in folder with simple name
-        if not clip_path.exists():
-            print(f"\tCutting clip {i + 1}: {full_title}...")
-            if cut_clip(
-                video_path, audio_path, clip["start_ms"], clip["end_ms"], clip_path
-            ):
+        else:
+            print(f"\tCutting clip {i + 1}: {clip['title']}...")
+            if cut_clip(video_path, audio_path, clip["start_ms"], clip["end_ms"], clip_path):
                 clip["clip_path"] = str(clip_path)
             else:
                 clip["clip_path"] = None
-                continue
-        else:
-            clip["clip_path"] = str(clip_path)
 
-        # Generate illustration and composite onto thumbnail template
-        if not thumb_path.exists():
-            illustration_path = clip_folder / "_temp_illustration.png"
+    return clips
 
-            if generate_illustration(
-                clip.get("thumbnail_prompt", full_title), illustration_path
-            ):
-                # Composite the illustration onto the thumbnail template
-                if composite_thumbnail(illustration_path, thumb_path):
-                    clip["thumbnail_path"] = str(thumb_path)
-                else:
-                    clip["thumbnail_path"] = None
 
-                # Remove temporary illustration file
-                if illustration_path.exists():
-                    illustration_path.unlink()
-                    print(f"\tCleaned up temporary illustration")
+def generate_thumbnails(clips: list[dict], work_dir: Path) -> list[dict]:
+    """Generate thumbnails for each clip."""
+    print("\n[5/6] Generating thumbnails...")
+
+    clips_dir = work_dir / "clips"
+
+    for i, clip in enumerate(clips):
+        folder = clips_dir / clip_folder_name(i, clip["title"])
+        folder.mkdir(exist_ok=True)
+        thumb_path = folder / "thumbnail.jpg"
+
+        if thumb_path.exists():
+            print(f"\tSkipping clip {i + 1}: {clip['title']} (thumbnail exists)")
+            clip["thumbnail_path"] = str(thumb_path)
+            continue
+
+        illustration_path = folder / "_temp_illustration.png"
+        if generate_illustration(
+            clip.get("thumbnail_prompt", clip["title"]), illustration_path
+        ):
+            if composite_thumbnail(illustration_path, thumb_path):
+                clip["thumbnail_path"] = str(thumb_path)
             else:
                 clip["thumbnail_path"] = None
+            if illustration_path.exists():
+                illustration_path.unlink()
         else:
-            clip["thumbnail_path"] = str(thumb_path)
+            clip["thumbnail_path"] = None
 
-        processed.append(clip)
-
-    return processed
+    return clips
 
 
 def save_queue(clips: list[dict], work_dir: Path):
@@ -535,7 +529,7 @@ def main():
     )
     parser.add_argument(
         "--step", type=int, choices=range(1, 7), metavar="N",
-        help="Force restart from step N (1=download, 2=transcribe, 3=extract clips, 4=cut clips, 5=thumbnails, 6=save queue)",
+        help="Force restart from step N (1=download, 2=transcribe, 3=extract clips, 4=cut clips, 5=generate thumbnails, 6=save queue)",
     )
     args = parser.parse_args()
 
@@ -662,13 +656,16 @@ def main():
             with open(clips_file, "w") as f:
                 json.dump(clips, f, indent=2)
 
-        # Steps 4-5: Cut clips and generate thumbnails
-        processed_clips = process_clips(video_path, audio_path, clips, work_dir)
+        # Step 4: Cut clips
+        clips = cut_clips(video_path, audio_path, clips, work_dir)
+
+        # Step 5: Generate thumbnails
+        clips = generate_thumbnails(clips, work_dir)
 
         # Step 6: Save queue
-        save_queue(processed_clips, work_dir)
+        save_queue(clips, work_dir)
 
-        print(f"\nProcessed {len(processed_clips)} clips")
+        print(f"\nProcessed {len(clips)} clips")
         print(f"Output directory: {work_dir / 'clips'}")
 
         clips_dir = work_dir / "clips"

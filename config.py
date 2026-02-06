@@ -16,17 +16,19 @@ HTTP_TIMEOUT = 30  # seconds per HTTP request
 
 # Thumbnail settings
 ILLUSTRATION_SIZE = (500, 500)  # (width, height) to scale cropped illustration to
-ILLUSTRATION_CENTER_X = 800    # x coordinate to center illustration on template
-ILLUSTRATION_CENTER_Y = 250    # y coordinate to center illustration on template
+ILLUSTRATION_CENTER_X = 1000    # x coordinate to center illustration on template
+ILLUSTRATION_CENTER_Y = 500    # y coordinate to center illustration on template
 
 # Prompts
 CLIP_EXTRACTION_PROMPT_TEMPLATE = """
 This is a transcript of a podcast conversation between the American video game designer and computer programmer
 Jonathan Blow and a host.
-Analyze this transcript and extract as many interesting clips as possible that would work well as long-form content on YouTube.
-Do not have any overlap between clips.
+Analyze this transcript and extract as many distinct interesting clip segments as possible that would work well as long-form content on YouTube.
+Make sure each clip starts at an understandable point in the conversation, such as the beginning of a new topic or a natural pause.
+Do not ever cut a clip in the middle of a sentence or thought. 
+Always end a clip at a natural stopping point.
 Each clip should be focused on a single topic or theme. Prioritize moments that are engaging and insightful.
-Each clip should be around 10 minutes long (with a minimum of 8 minutes and a maximum of 20 minutes).
+Each clip can be roughly around 10 minutes long, a clip can be longer to let a speaker finish their thought (minimum of 8 minutes and a maximum of 20 minutes).
 
 Return JSON in this exact format:
 {{
