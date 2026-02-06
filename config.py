@@ -4,8 +4,8 @@ import os
 FFMPEG = os.environ.get("FFMPEG_PATH", "/opt/homebrew/bin/ffmpeg")
 
 # AI Models
-CLIP_MODEL = "moonshotai/kimi-k2.5"
-IMAGE_MODEL = "google/gemini-2.5-flash-image"
+CLIP_MODEL = "google/gemini-3-pro-preview"
+IMAGE_MODEL = "black-forest-labs/flux.2-pro"
 
 # AssemblyAI Models
 ASSEMBLYAI_SPEECH_MODELS = ["universal-2"]
@@ -16,8 +16,8 @@ HTTP_TIMEOUT = 30  # seconds per HTTP request
 
 # Thumbnail settings
 ILLUSTRATION_SIZE = (500, 500)  # (width, height) to scale cropped illustration to
-ILLUSTRATION_CENTER_X = 1000    # x coordinate to center illustration on template
-ILLUSTRATION_CENTER_Y = 500    # y coordinate to center illustration on template
+ILLUSTRATION_CENTER_X = 850    # x coordinate to center illustration on template
+ILLUSTRATION_CENTER_Y = 350    # y coordinate to center illustration on template
 
 # Prompts
 CLIP_EXTRACTION_PROMPT_TEMPLATE = """
@@ -28,7 +28,7 @@ Make sure each clip starts at an understandable point in the conversation, such 
 Do not ever cut a clip in the middle of a sentence or thought. 
 Always end a clip at a natural stopping point.
 Each clip should be focused on a single topic or theme. Prioritize moments that are engaging and insightful.
-Each clip can be roughly around 10 minutes long, a clip can be longer to let a speaker finish their thought (minimum of 8 minutes and a maximum of 20 minutes).
+Each clip can be roughly around 10 minutes long, a clip can be longer to let a speaker finish their thought (STRICT MINIMUM of 8 minutes and STRICT MAXIMUM of 20 minutes).
 
 Return JSON in this exact format:
 {{
@@ -50,7 +50,8 @@ IMPORTANT: The title must start with "Jonathan Blow on" and then a short descrip
 ILLUSTRATION_PROMPT_TEMPLATE = """
 Create a simple illustration for a YouTube Video Thumbnail about: {prompt}.
 Style: Clean, minimal, high contrast, suitable for overlay on a thumbnail.
-The illustration should be a single cohesive visual element (icon, symbol, or simple graphic)
-that represents the topic. Use colors, clear shapes, no faces.
+The illustration should be a single cohesive visual element (icon, symbol, or simple graphic) that represents the topic. 
+Use colors, clear shapes, no faces or long sentences of words.
+Do not cut off the illustration, it should be fully contained within the canvas.
 IMPORTANT: Use a pure WHITE background (#FFFFFF) to match the thumbnail template.
 """

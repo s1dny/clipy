@@ -16,6 +16,8 @@ import assemblyai as aai
 import requests
 from dotenv import load_dotenv
 
+import numpy as np
+from concurrent.futures import ThreadPoolExecutor
 from PIL import Image
 
 from config import (
@@ -243,9 +245,10 @@ Transcript:
                 },
                 {"role": "user", "content": prompt},
             ],
-            "provider": {"sort": "throughput"},
+            "provider": {"sort": "price"},
+            "thinking": {"type": "enabled", "budget_tokens": 10000},
         },
-        timeout=1000,
+        timeout=10000,
     )
     if not resp.ok:
         print(f"\tAPI error {resp.status_code}: {resp.text[:500]}")
@@ -299,7 +302,7 @@ def generate_illustration(prompt: str, output_path: Path) -> bool:
                 "model": IMAGE_MODEL,
                 "messages": [{"role": "user", "content": illustration_prompt}],
                 "provider": {
-                    "sort": "throughput",
+                    "sort": "price",
                 },
             },
             timeout=120,
@@ -343,26 +346,22 @@ def composite_thumbnail(illustration_path: Path, output_path: Path) -> bool:
         template = Image.open(THUMBNAIL_TEMPLATE).convert("RGBA")
         illustration = Image.open(illustration_path).convert("RGBA")
 
-        # Find bounding box of non-white pixels
-        # Create a mask where any channel differs significantly from white
-        pixels = illustration.load()
-        w, h = illustration.size
-        threshold = 250
-        min_x, min_y, max_x, max_y = w, h, 0, 0
-        for y in range(h):
-            for x in range(w):
-                r, g, b, a = pixels[x, y]
-                if a > 10 and (r < threshold or g < threshold or b < threshold):
-                    min_x = min(min_x, x)
-                    min_y = min(min_y, y)
-                    max_x = max(max_x, x)
-                    max_y = max(max_y, y)
+        # Find bounding box of non-white pixels using numpy
+        arr = np.array(illustration)
+        threshold = 220
+        # Mask: alpha > 10 and any RGB channel below threshold
+        mask = (arr[:, :, 3] > 10) & (
+            (arr[:, :, 0] < threshold) | (arr[:, :, 1] < threshold) | (arr[:, :, 2] < threshold)
+        )
+        coords = np.argwhere(mask)
 
-        if max_x <= min_x or max_y <= min_y:
+        if coords.size == 0:
             print(f"\tNo non-white content found in illustration")
             return False
 
-        # Crop to content
+        # Crop to content (argwhere returns [row, col] = [y, x])
+        min_y, min_x = coords.min(axis=0)
+        max_y, max_x = coords.max(axis=0)
         cropped = illustration.crop((min_x, min_y, max_x + 1, max_y + 1))
 
         # Scale to fixed size, preserving aspect ratio
@@ -412,13 +411,13 @@ def cut_clip(
             "-map",
             "1:a:0",
             "-c:v",
-            "libx264",
+            "h264_videotoolbox",
+            "-b:v",
+            "8M",
             "-c:a",
             "aac",
             "-b:a",
             "192k",
-            "-preset",
-            "fast",
             "-movflags",
             "+faststart",
             str(output_path),
@@ -464,34 +463,43 @@ def cut_clips(
     return clips
 
 
+def _generate_single_thumbnail(args: tuple) -> tuple[int, str | None]:
+    """Generate a single thumbnail (for use with ThreadPoolExecutor)."""
+    i, clip, clips_dir = args
+    folder = clips_dir / clip_folder_name(i, clip["title"])
+    folder.mkdir(exist_ok=True)
+    thumb_path = folder / "thumbnail.jpg"
+
+    if thumb_path.exists():
+        print(f"\tSkipping clip {i + 1}: {clip['title']} (thumbnail exists)")
+        return i, str(thumb_path)
+
+    illustration_path = folder / "_temp_illustration.png"
+    if generate_illustration(
+        clip.get("thumbnail_prompt", clip["title"]), illustration_path
+    ):
+        if composite_thumbnail(illustration_path, thumb_path):
+            result = str(thumb_path)
+        else:
+            result = None
+        if illustration_path.exists():
+            illustration_path.unlink()
+    else:
+        result = None
+
+    return i, result
+
+
 def generate_thumbnails(clips: list[dict], work_dir: Path) -> list[dict]:
-    """Generate thumbnails for each clip."""
+    """Generate thumbnails for each clip in parallel."""
     print("\n[5/6] Generating thumbnails...")
 
     clips_dir = work_dir / "clips"
+    tasks = [(i, clip, clips_dir) for i, clip in enumerate(clips)]
 
-    for i, clip in enumerate(clips):
-        folder = clips_dir / clip_folder_name(i, clip["title"])
-        folder.mkdir(exist_ok=True)
-        thumb_path = folder / "thumbnail.jpg"
-
-        if thumb_path.exists():
-            print(f"\tSkipping clip {i + 1}: {clip['title']} (thumbnail exists)")
-            clip["thumbnail_path"] = str(thumb_path)
-            continue
-
-        illustration_path = folder / "_temp_illustration.png"
-        if generate_illustration(
-            clip.get("thumbnail_prompt", clip["title"]), illustration_path
-        ):
-            if composite_thumbnail(illustration_path, thumb_path):
-                clip["thumbnail_path"] = str(thumb_path)
-            else:
-                clip["thumbnail_path"] = None
-            if illustration_path.exists():
-                illustration_path.unlink()
-        else:
-            clip["thumbnail_path"] = None
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        for i, thumb_path in pool.map(_generate_single_thumbnail, tasks):
+            clips[i]["thumbnail_path"] = thumb_path
 
     return clips
 
