@@ -24,6 +24,7 @@ from config import (
     FFMPEG,
     CLIP_MODEL,
     IMAGE_MODEL,
+    OPENROUTER_API_URL,
     ASSEMBLYAI_SPEECH_MODELS,
     ILLUSTRATION_SIZE,
     CLIP_EXTRACTION_PROMPT_TEMPLATE,
@@ -32,6 +33,8 @@ from config import (
     ILLUSTRATION_CENTER_Y,
     MAX_TRANSCRIPTION_WAIT_SECONDS,
     HTTP_TIMEOUT,
+    CLIP_EXTRACTION_TIMEOUT,
+    IMAGE_GENERATION_TIMEOUT,
 )
 
 # Constants
@@ -59,6 +62,19 @@ def run_cmd(cmd: list[str], cwd: str | None = None) -> tuple[int, str, str]:
     print(f"\tRunning: {' '.join(cmd[:5])}...")
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
     return result.returncode, result.stdout, result.stderr
+
+
+def load_or_compute(path: Path, compute_fn, *args, skip_message: str | None = None):
+    """Load JSON from path if it exists, otherwise compute, save, and return."""
+    if path.exists():
+        if skip_message:
+            print(skip_message)
+        with open(path) as f:
+            return json.load(f)
+    result = compute_fn(*args)
+    with open(path, "w") as f:
+        json.dump(result, f, indent=2)
+    return result
 
 
 def download_video(youtube_url: str, work_dir: Path) -> tuple[Path, Path]:
@@ -120,12 +136,12 @@ def download_video(youtube_url: str, work_dir: Path) -> tuple[Path, Path]:
     return video_path, audio_path
 
 
-def transcribe_audio(audio_path: Path) -> dict:
+def transcribe_audio(audio_path: Path, api_key: str) -> dict:
     """Upload audio to AssemblyAI and get transcript with speaker diarization."""
     print("\n[2/6] Transcribing audio with AssemblyAI...")
 
     # Use SDK for submission (handles file upload), then poll via REST for reliability
-    aai.settings.api_key = ASSEMBLYAI_API_KEY
+    aai.settings.api_key = api_key
 
     config = aai.TranscriptionConfig(
         speech_models=ASSEMBLYAI_SPEECH_MODELS,
@@ -144,7 +160,7 @@ def transcribe_audio(audio_path: Path) -> dict:
     print(f"\tTranscript ID: {transcript_id}")
 
     poll_url = f"https://api.assemblyai.com/v2/transcript/{transcript_id}"
-    poll_headers = {"authorization": ASSEMBLYAI_API_KEY}
+    poll_headers = {"authorization": api_key}
     start_time = time.time()
 
     while True:
@@ -213,7 +229,7 @@ def build_sentence_transcript(transcript: dict) -> list[dict]:
     return sentences
 
 
-def extract_clips(sentences: list[dict]) -> list[dict]:
+def extract_clips(sentences: list[dict], api_key: str) -> list[dict]:
     """Use LLM to extract interesting clip segments from sentence transcript"""
     print("\n[3/6] Extracting clip segments with LLM...")
 
@@ -231,9 +247,9 @@ Transcript:
 
     print(f"\tUsing model: {CLIP_MODEL}")
     resp = requests.post(
-        "https://openrouter.ai/api/v1/chat/completions",
+        OPENROUTER_API_URL,
         headers={
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         },
         json={
@@ -246,9 +262,9 @@ Transcript:
                 {"role": "user", "content": prompt},
             ],
             "provider": {"sort": "price"},
-            "thinking": {"type": "enabled", "budget_tokens": 10000},
+            "thinking": {"type": "enabled", "budget_tokens": 100000},
         },
-        timeout=10000,
+        timeout=CLIP_EXTRACTION_TIMEOUT,
     )
     if not resp.ok:
         print(f"\tAPI error {resp.status_code}: {resp.text[:500]}")
@@ -284,7 +300,7 @@ Transcript:
     return clips
 
 
-def generate_illustration(prompt: str, output_path: Path) -> bool:
+def generate_illustration(prompt: str, output_path: Path, api_key: str) -> bool:
     """Generate an illustration to be composited onto thumbnail template"""
     print(f"\tGenerating illustration: {output_path.name}...")
 
@@ -293,9 +309,9 @@ def generate_illustration(prompt: str, output_path: Path) -> bool:
         illustration_prompt = ILLUSTRATION_PROMPT_TEMPLATE.format(prompt=prompt)
 
         resp = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
+            OPENROUTER_API_URL,
             headers={
-                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
             json={
@@ -305,7 +321,7 @@ def generate_illustration(prompt: str, output_path: Path) -> bool:
                     "sort": "price",
                 },
             },
-            timeout=120,
+            timeout=IMAGE_GENERATION_TIMEOUT,
         )
         if not resp.ok:
             print(f"\tAPI error {resp.status_code}: {resp.text[:500]}")
@@ -334,16 +350,16 @@ def generate_illustration(prompt: str, output_path: Path) -> bool:
         return False
 
 
-def composite_thumbnail(illustration_path: Path, output_path: Path) -> bool:
+def composite_thumbnail(illustration_path: Path, output_path: Path, template_path: Path) -> bool:
     """Crop illustration to non-white content, scale, and center on template."""
     print(f"\tCompositing thumbnail: {output_path.name}...")
 
-    if not THUMBNAIL_TEMPLATE.exists():
-        print(f"\tError: Thumbnail template not found at {THUMBNAIL_TEMPLATE}")
+    if not template_path.exists():
+        print(f"\tError: Thumbnail template not found at {template_path}")
         return False
 
     try:
-        template = Image.open(THUMBNAIL_TEMPLATE).convert("RGBA")
+        template = Image.open(template_path).convert("RGBA")
         illustration = Image.open(illustration_path).convert("RGBA")
 
         # Find bounding box of non-white pixels using numpy
@@ -365,7 +381,7 @@ def composite_thumbnail(illustration_path: Path, output_path: Path) -> bool:
         cropped = illustration.crop((min_x, min_y, max_x + 1, max_y + 1))
 
         # Scale to fixed size, preserving aspect ratio
-        cropped.thumbnail(ILLUSTRATION_SIZE, Image.LANCZOS)
+        cropped.thumbnail(ILLUSTRATION_SIZE, Image.Resampling.LANCZOS)
 
         # Center on the template at the configured coordinates
         paste_x = ILLUSTRATION_CENTER_X - cropped.width // 2
@@ -465,7 +481,7 @@ def cut_clips(
 
 def _generate_single_thumbnail(args: tuple) -> tuple[int, str | None]:
     """Generate a single thumbnail (for use with ThreadPoolExecutor)."""
-    i, clip, clips_dir = args
+    i, clip, clips_dir, api_key, template_path = args
     folder = clips_dir / clip_folder_name(i, clip["title"])
     folder.mkdir(exist_ok=True)
     thumb_path = folder / "thumbnail.jpg"
@@ -476,9 +492,9 @@ def _generate_single_thumbnail(args: tuple) -> tuple[int, str | None]:
 
     illustration_path = folder / "_temp_illustration.png"
     if generate_illustration(
-        clip.get("thumbnail_prompt", clip["title"]), illustration_path
+        clip.get("thumbnail_prompt", clip["title"]), illustration_path, api_key
     ):
-        if composite_thumbnail(illustration_path, thumb_path):
+        if composite_thumbnail(illustration_path, thumb_path, template_path):
             result = str(thumb_path)
         else:
             result = None
@@ -490,12 +506,12 @@ def _generate_single_thumbnail(args: tuple) -> tuple[int, str | None]:
     return i, result
 
 
-def generate_thumbnails(clips: list[dict], work_dir: Path) -> list[dict]:
+def generate_thumbnails(clips: list[dict], work_dir: Path, api_key: str, template_path: Path) -> list[dict]:
     """Generate thumbnails for each clip in parallel."""
     print("\n[5/6] Generating thumbnails...")
 
     clips_dir = work_dir / "clips"
-    tasks = [(i, clip, clips_dir) for i, clip in enumerate(clips)]
+    tasks = [(i, clip, clips_dir, api_key, template_path) for i, clip in enumerate(clips)]
 
     with ThreadPoolExecutor(max_workers=10) as pool:
         for i, thumb_path in pool.map(_generate_single_thumbnail, tasks):
@@ -515,10 +531,12 @@ def save_queue(clips: list[dict], work_dir: Path):
         with open(queue_file) as f:
             queue = json.load(f)
 
+    existing = {(q["start_ms"], q["end_ms"]) for q in queue}
     for clip in clips:
-        queue.append(
-            {**clip, "status": "pending", "created_at": datetime.now().isoformat()}
-        )
+        if (clip["start_ms"], clip["end_ms"]) not in existing:
+            queue.append(
+                {**clip, "status": "pending", "created_at": datetime.now().isoformat()}
+            )
 
     with open(queue_file, "w") as f:
         json.dump(queue, f, indent=2)
@@ -549,24 +567,19 @@ def main():
     if not openrouter_key:
         parser.error("OPENROUTER_API_KEY environment variable not set")
 
-    # Make keys available to functions via module globals
-    global ASSEMBLYAI_API_KEY, OPENROUTER_API_KEY, WORK_DIR, THUMBNAIL_TEMPLATE
-    ASSEMBLYAI_API_KEY = assemblyai_key
-    OPENROUTER_API_KEY = openrouter_key
-
-    WORK_DIR = Path(
+    work_root = Path(
         os.environ.get("YT_CLIP_WORK_DIR") or Path(__file__).parent / "output"
     )
-    THUMBNAIL_TEMPLATE = Path(
+    thumbnail_template = Path(
         os.environ.get("THUMBNAIL_TEMPLATE") or Path(__file__).parent / "thumbnail.jpg"
     )
 
-    if not THUMBNAIL_TEMPLATE.exists():
-        print(f"Warning: Thumbnail template not found at {THUMBNAIL_TEMPLATE}")
+    if not thumbnail_template.exists():
+        print(f"Warning: Thumbnail template not found at {thumbnail_template}")
         print("Thumbnails will be generated without the template overlay.")
 
     folder_name = extract_video_id(args.url)
-    work_dir = WORK_DIR / folder_name
+    work_dir = work_root / folder_name
 
     print(f"URL: {args.url}")
     print(f"Work dir: {work_dir}")
@@ -630,45 +643,30 @@ def main():
             video_path, audio_path = download_video(args.url, work_dir)
 
         # Step 2: Transcribe
-        transcript_file = work_dir / "transcript.json"
-        if transcript_file.exists():
-            print("\n[2/6] Transcribing audio with AssemblyAI...")
-            print("\tSkipping: transcript already exists")
-            with open(transcript_file) as f:
-                transcript = json.load(f)
-        else:
-            transcript = transcribe_audio(audio_path)
-            with open(transcript_file, "w") as f:
-                json.dump(transcript, f, indent=2)
+        transcript = load_or_compute(
+            work_dir / "transcript.json",
+            transcribe_audio, audio_path, assemblyai_key,
+            skip_message="\n[2/6] Transcribing audio with AssemblyAI...\n\tSkipping: transcript already exists",
+        )
 
         # Build sentence-level transcript
-        sentences_file = work_dir / "sentences.json"
-        if sentences_file.exists():
-            with open(sentences_file) as f:
-                sentences = json.load(f)
-        else:
-            sentences = build_sentence_transcript(transcript)
-            with open(sentences_file, "w") as f:
-                json.dump(sentences, f, indent=2)
-            print(f"\tSaved {len(sentences)} sentences to {sentences_file.name}")
+        sentences = load_or_compute(
+            work_dir / "sentences.json",
+            build_sentence_transcript, transcript,
+        )
 
         # Step 3: Extract clips with LLM
-        clips_file = work_dir / "clips.json"
-        if clips_file.exists():
-            print("\n[3/6] Extracting clip segments with LLM...")
-            print("\tSkipping: clips already extracted")
-            with open(clips_file) as f:
-                clips = json.load(f)
-        else:
-            clips = extract_clips(sentences)
-            with open(clips_file, "w") as f:
-                json.dump(clips, f, indent=2)
+        clips = load_or_compute(
+            work_dir / "clips.json",
+            extract_clips, sentences, openrouter_key,
+            skip_message="\n[3/6] Extracting clip segments with LLM...\n\tSkipping: clips already extracted",
+        )
 
         # Step 4: Cut clips
         clips = cut_clips(video_path, audio_path, clips, work_dir)
 
         # Step 5: Generate thumbnails
-        clips = generate_thumbnails(clips, work_dir)
+        clips = generate_thumbnails(clips, work_dir, openrouter_key, thumbnail_template)
 
         # Step 6: Save queue
         save_queue(clips, work_dir)
