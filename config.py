@@ -6,12 +6,10 @@ FFMPEG = os.environ.get("FFMPEG_PATH", "/opt/homebrew/bin/ffmpeg")
 # AI Models
 CLIP_MODEL = "google/gemini-3-pro-preview"
 IMAGE_MODEL = "black-forest-labs/flux.2-pro"
+ASSEMBLYAI_SPEECH_MODELS = ["universal-3-pro"]
 
 # API
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
-
-# AssemblyAI Models
-ASSEMBLYAI_SPEECH_MODELS = ["universal-3"]
 
 # Timeouts
 MAX_TRANSCRIPTION_WAIT_SECONDS = 3600  # 60 minutes
@@ -20,7 +18,7 @@ CLIP_EXTRACTION_TIMEOUT = 3600  # seconds, LLM clip extraction (large context)
 IMAGE_GENERATION_TIMEOUT = 120  # seconds, image generation per request
 
 # Thumbnail settings
-ILLUSTRATION_SIZE = (500, 500)  # (width, height) to scale cropped illustration to
+ILLUSTRATION_SIZE = (700, 700)  # (width, height) to scale cropped illustration to
 ILLUSTRATION_CENTER_X = 850    # x coordinate to center illustration on template
 ILLUSTRATION_CENTER_Y = 350    # y coordinate to center illustration on template
 

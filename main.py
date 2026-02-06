@@ -545,13 +545,139 @@ def save_queue(clips: list[dict], work_dir: Path):
     print(f"\tTotal clips in queue: {len(queue)}")
 
 
+def refresh_clips(work_dir: Path, api_key: str, template_path: Path, *, force: bool = False) -> None:
+    """Detect changes in clips.json and update folder names / thumbnails accordingly.
+
+    - Title change   → rename clip folder + regenerate thumbnail
+    - Prompt change  → regenerate thumbnail
+    - --force        → regenerate all thumbnails
+    """
+    clips_json_path = work_dir / "clips.json"
+    if not clips_json_path.exists():
+        print("Error: clips.json not found. Run the full pipeline first.")
+        sys.exit(1)
+
+    with open(clips_json_path) as f:
+        clips = json.load(f)
+
+    clips_dir = work_dir / "clips"
+    if not clips_dir.exists():
+        print("Error: clips/ directory not found. Run the full pipeline first.")
+        sys.exit(1)
+
+    print("\n[Refresh] Checking for changes in clips.json...\n")
+
+    thumbnails_to_regenerate: list[tuple[int, dict]] = []
+    changes = False
+
+    for i, clip in enumerate(clips):
+        expected_name = clip_folder_name(i, clip["title"])
+        expected_folder = clips_dir / expected_name
+        title_changed = False
+
+        # Find existing folder by its index prefix (e.g. "01 - ")
+        prefix = f"{i + 1:02d} - "
+        existing_folders = [
+            f for f in clips_dir.iterdir()
+            if f.is_dir() and f.name.startswith(prefix)
+        ]
+
+        if not existing_folders:
+            print(f"  Warning: no folder found for clip {i + 1} ({prefix}*), skipping")
+            continue
+
+        existing_folder = existing_folders[0]
+
+        # --- Title change → rename folder ---
+        if existing_folder.name != expected_name:
+            print(f"  Title changed for clip {i + 1}:")
+            print(f"    Old: {existing_folder.name}")
+            print(f"    New: {expected_name}")
+            existing_folder.rename(expected_folder)
+            title_changed = True
+            changes = True
+
+            # Update stored paths
+            if (expected_folder / "video.mp4").exists():
+                clip["clip_path"] = str(expected_folder / "video.mp4")
+            if (expected_folder / "thumbnail.jpg").exists():
+                clip["thumbnail_path"] = str(expected_folder / "thumbnail.jpg")
+
+        folder = expected_folder
+
+        # --- Thumbnail prompt change detection ---
+        prompt_file = folder / ".thumbnail_prompt"
+        current_prompt = clip.get("thumbnail_prompt", "").strip()
+
+        prompt_changed = False
+        if prompt_file.exists():
+            saved_prompt = prompt_file.read_text().strip()
+            if saved_prompt != current_prompt:
+                print(f"  Thumbnail prompt changed for clip {i + 1}: {clip['title']}")
+                prompt_changed = True
+                changes = True
+        else:
+            # First refresh — save current prompt for future comparison
+            prompt_file.write_text(current_prompt)
+
+        # Queue thumbnail regeneration if title or prompt changed, or --force
+        if title_changed or prompt_changed or force:
+            thumbnails_to_regenerate.append((i, clip))
+
+    # --- Regenerate thumbnails in parallel ---
+    if thumbnails_to_regenerate:
+        if force:
+            changes = True
+        print(f"\n  Regenerating {len(thumbnails_to_regenerate)} thumbnail(s)...\n")
+        # Delete existing thumbnails so _generate_single_thumbnail doesn't skip them
+        for i, clip in thumbnails_to_regenerate:
+            thumb = clips_dir / clip_folder_name(i, clip["title"]) / "thumbnail.jpg"
+            if thumb.exists():
+                thumb.unlink()
+        tasks = [
+            (i, clip, clips_dir, api_key, template_path)
+            for i, clip in thumbnails_to_regenerate
+        ]
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            for i, thumb_path in pool.map(_generate_single_thumbnail, tasks):
+                clip_ref = clips[i]
+                clip_ref["thumbnail_path"] = thumb_path
+                # Save the new prompt so next refresh knows the baseline
+                folder = clips_dir / clip_folder_name(i, clip_ref["title"])
+                prompt_file = folder / ".thumbnail_prompt"
+                prompt_file.write_text(clip_ref.get("thumbnail_prompt", ""))
+
+    if changes:
+        # Persist updated clips.json (may have new paths)
+        with open(clips_json_path, "w") as f:
+            json.dump(clips, f, indent=2)
+
+        # Refresh upload queue
+        queue_file = work_dir / "upload_queue.json"
+        if queue_file.exists():
+            queue_file.unlink()
+        save_queue(clips, work_dir)
+
+        print(f"\n[Refresh] Done! Applied changes.")
+    else:
+        print("\n[Refresh] No changes detected.")
+
+
 def main():
     load_dotenv()
 
     parser = argparse.ArgumentParser(description="YouTube Clip Automation")
     parser.add_argument("url", help="YouTube video URL")
     parser.add_argument(
+        "command", nargs="?", default=None,
+        help="Optional command: 'refresh' to detect changes in clips.json and update folders/thumbnails",
+    )
+    parser.add_argument(
         "--reset", action="store_true", help="Reset and start from scratch"
+    )
+    parser.add_argument(
+        "--force", action="store_true",
+        help="With 'refresh': regenerate all thumbnails regardless of changes",
     )
     parser.add_argument(
         "--step", type=int, choices=range(1, 7), metavar="N",
@@ -562,10 +688,10 @@ def main():
     # Env vars (validated early so we fail fast before downloading)
     assemblyai_key = os.environ.get("ASSEMBLYAI_API_KEY", "")
     openrouter_key = os.environ.get("OPENROUTER_API_KEY", "")
-    if not assemblyai_key:
-        parser.error("ASSEMBLYAI_API_KEY environment variable not set")
     if not openrouter_key:
         parser.error("OPENROUTER_API_KEY environment variable not set")
+    if args.command != "refresh" and not assemblyai_key:
+        parser.error("ASSEMBLYAI_API_KEY environment variable not set")
 
     work_root = Path(
         os.environ.get("YT_CLIP_WORK_DIR") or Path(__file__).parent / "output"
@@ -583,6 +709,13 @@ def main():
 
     print(f"URL: {args.url}")
     print(f"Work dir: {work_dir}")
+
+    # Handle refresh command
+    if args.command == "refresh":
+        refresh_clips(work_dir, openrouter_key, thumbnail_template, force=args.force)
+        return
+    elif args.command is not None:
+        parser.error(f"Unknown command: {args.command}")
 
     # Handle reset
     if args.reset and work_dir.exists():
