@@ -54,18 +54,7 @@ This runs all 6 steps:
 5. Generate thumbnails
 6. Save to global upload queue
 
-Results are cached per step, so re-running the same URL resumes from where it left off.
-
-### Refresh clips
-
-After editing `clips.json` (e.g. changing titles or thumbnail prompts):
-
-```bash
-uv run main.py <youtube-url> refresh
-uv run main.py <youtube-url> refresh --force  # regenerate all thumbnails
-```
-
-Also regenerates any missing thumbnails from clip folders.
+Results are cached per step, so re-running the same URL resumes from where it left off. Changes to `clips.json` (titles, thumbnail prompts) and missing thumbnails are detected automatically on re-run.
 
 ### Upload to YouTube
 
@@ -73,15 +62,13 @@ Also regenerates any missing thumbnails from clip folders.
 uv run main.py upload
 ```
 
-Uploads pending clips from the global queue (`output/upload_queue.json`) to YouTube as unlisted videos. On first run, assigns a `scheduled_date` to each pending clip in random order, one per day at 00:00 UTC. Only clips whose scheduled date has arrived are uploaded. Run daily (e.g. via cron) to drip-feed one video per day.
+Uploads all pending clips from the global queue (`output/upload_queue.json`) to YouTube as private, scheduled to publish one per day. Dates are assigned in random order on first run.
 
 ### Options
 
 | Flag | Description |
 |---|---|
-| `--reset` | Clear previous output and start from scratch |
-| `--step N` | Force re-run from step N (1-6) |
-| `--force` | With `refresh`: regenerate all thumbnails |
+| `--step N` | Force re-run from step N (1-6), e.g. `--step 5` to regenerate all thumbnails |
 
 ## Project structure
 

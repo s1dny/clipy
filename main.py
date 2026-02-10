@@ -42,10 +42,23 @@ from config import (
 YT_DLP = [sys.executable, "-m", "yt_dlp"]
 YT_DLP_FORMAT = "bv*+ba/b"
 YT_DLP_AUDIO_QUALITY = "0"
-THUMBNAIL_JPEG_QUALITY = 2
 LLM_SYSTEM_PROMPT = (
     "You are an expert video editor. Return ONLY valid JSON, no markdown."
 )
+
+
+def openrouter_request(api_key: str, body: dict, timeout: int) -> dict:
+    """Make a request to OpenRouter API and return the parsed response."""
+    resp = requests.post(
+        OPENROUTER_API_URL,
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json=body,
+        timeout=timeout,
+    )
+    if not resp.ok:
+        print(f"\tAPI error {resp.status_code}: {resp.text[:500]}")
+        resp.raise_for_status()
+    return resp.json()
 
 
 def extract_video_id(url: str) -> str:
@@ -247,31 +260,17 @@ Transcript:
     )
 
     print(f"\tUsing model: {CLIP_MODEL}")
-    resp = requests.post(
-        OPENROUTER_API_URL,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": CLIP_MODEL,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": LLM_SYSTEM_PROMPT,
-                },
-                {"role": "user", "content": prompt},
-            ],
-            "provider": {"sort": "price"},
-            "thinking": {"type": "enabled", "budget_tokens": 100000},
-        },
-        timeout=CLIP_EXTRACTION_TIMEOUT,
-    )
-    if not resp.ok:
-        print(f"\tAPI error {resp.status_code}: {resp.text[:500]}")
-        resp.raise_for_status()
+    data = openrouter_request(api_key, {
+        "model": CLIP_MODEL,
+        "messages": [
+            {"role": "system", "content": LLM_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        "provider": {"sort": "price"},
+        "thinking": {"type": "enabled", "budget_tokens": 100000},
+    }, CLIP_EXTRACTION_TIMEOUT)
 
-    content = resp.json()["choices"][0]["message"]["content"]
+    content = data["choices"][0]["message"]["content"]
 
     try:
         clips = json.loads(content)["clips"]
@@ -306,29 +305,13 @@ def generate_illustration(prompt: str, output_path: Path, api_key: str) -> bool:
     print(f"\tGenerating illustration: {output_path.name}...")
 
     try:
-        # Create illustration prompt from config template
         illustration_prompt = ILLUSTRATION_PROMPT_TEMPLATE.format(prompt=prompt)
+        data = openrouter_request(api_key, {
+            "model": IMAGE_MODEL,
+            "messages": [{"role": "user", "content": illustration_prompt}],
+            "provider": {"sort": "price"},
+        }, IMAGE_GENERATION_TIMEOUT)
 
-        resp = requests.post(
-            OPENROUTER_API_URL,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": IMAGE_MODEL,
-                "messages": [{"role": "user", "content": illustration_prompt}],
-                "provider": {
-                    "sort": "price",
-                },
-            },
-            timeout=IMAGE_GENERATION_TIMEOUT,
-        )
-        if not resp.ok:
-            print(f"\tAPI error {resp.status_code}: {resp.text[:500]}")
-            resp.raise_for_status()
-
-        data = resp.json()
         message = data["choices"][0]["message"]
 
         # Check for images array (Gemini format)
@@ -456,14 +439,23 @@ def clip_folder_name(i: int, title: str) -> str:
 def cut_clips(
     video_path: Path, audio_path: Path, clips: list[dict], work_dir: Path
 ) -> list[dict]:
-    """Cut clips from the source video."""
+    """Cut clips from the source video. Detects title changes and renames folders."""
     print("\n[4/6] Cutting clips...")
 
     clips_dir = work_dir / "clips"
     clips_dir.mkdir(exist_ok=True)
 
     for i, clip in enumerate(clips):
-        folder = clips_dir / clip_folder_name(i, clip["title"])
+        expected_name = clip_folder_name(i, clip["title"])
+        prefix = f"{i + 1:02d} - "
+
+        # Rename folder if title changed
+        existing = [f for f in clips_dir.iterdir() if f.is_dir() and f.name.startswith(prefix)]
+        if existing and existing[0].name != expected_name:
+            print(f"\tTitle changed for clip {i + 1}: renaming folder")
+            existing[0].rename(clips_dir / expected_name)
+
+        folder = clips_dir / expected_name
         folder.mkdir(exist_ok=True)
         clip_path = folder / "video.mp4"
 
@@ -492,26 +484,38 @@ def _generate_single_thumbnail(args: tuple) -> tuple[int, str | None]:
         return i, str(thumb_path)
 
     illustration_path = folder / "_temp_illustration.png"
-    if generate_illustration(
-        clip.get("thumbnail_prompt", clip["title"]), illustration_path, api_key
-    ):
-        if composite_thumbnail(illustration_path, thumb_path, template_path):
-            result = str(thumb_path)
-        else:
-            result = None
+    try:
+        if generate_illustration(clip.get("thumbnail_prompt", clip["title"]), illustration_path, api_key):
+            if composite_thumbnail(illustration_path, thumb_path, template_path):
+                return i, str(thumb_path)
+        return i, None
+    finally:
         if illustration_path.exists():
             illustration_path.unlink()
-    else:
-        result = None
-
-    return i, result
 
 
 def generate_thumbnails(clips: list[dict], work_dir: Path, api_key: str, template_path: Path) -> list[dict]:
-    """Generate thumbnails for each clip in parallel."""
+    """Generate thumbnails for each clip in parallel. Detects prompt changes and missing thumbnails."""
     print("\n[5/6] Generating thumbnails...")
 
     clips_dir = work_dir / "clips"
+
+    # Detect prompt changes and delete stale thumbnails so they get regenerated
+    for i, clip in enumerate(clips):
+        folder = clips_dir / clip_folder_name(i, clip["title"])
+        if not folder.exists():
+            continue
+        prompt_file = folder / ".thumbnail_prompt"
+        current_prompt = clip.get("thumbnail_prompt", "").strip()
+
+        if prompt_file.exists():
+            if prompt_file.read_text().strip() != current_prompt:
+                print(f"\tPrompt changed for clip {i + 1}: {clip['title']}")
+                thumb = folder / "thumbnail.jpg"
+                if thumb.exists():
+                    thumb.unlink()
+        prompt_file.write_text(current_prompt)
+
     tasks = [(i, clip, clips_dir, api_key, template_path) for i, clip in enumerate(clips)]
 
     with ThreadPoolExecutor(max_workers=10) as pool:
@@ -623,15 +627,27 @@ def upload_single_video(youtube, item: dict) -> bool:
         f"#jonathanblow #gamedev #webdevelopment #programming #jai"
     )
 
+    # Schedule for the assigned date at 00:00 UTC if available
+    scheduled_date = item.get("scheduled_date")
+    if scheduled_date:
+        publish_at = f"{scheduled_date}T12:00:00Z"
+        status_body = {
+            "privacyStatus": "private",
+            "publishAt": publish_at,
+        }
+        print(f"  Scheduled to publish: {scheduled_date}")
+    else:
+        status_body = {
+            "privacyStatus": "unlisted",
+        }
+
     body = {
         "snippet": {
             "title": title,
             "description": description,
             "categoryId": "22",
         },
-        "status": {
-            "privacyStatus": "unlisted",
-        },
+        "status": status_body,
     }
 
     from tqdm import tqdm
@@ -730,152 +746,11 @@ def upload_from_queue(queue_file: Path):
     print(f"\nUploaded {uploaded}/{len(pending)} clip(s)")
 
 
-def refresh_clips(work_dir: Path, api_key: str, template_path: Path, *, force: bool = False) -> None:
-    """Detect changes in clips.json and update folder names / thumbnails accordingly.
-
-    - Title change   → rename clip folder + regenerate thumbnail
-    - Prompt change  → regenerate thumbnail
-    - --force        → regenerate all thumbnails
-    """
-    clips_json_path = work_dir / "clips.json"
-    if not clips_json_path.exists():
-        print("Error: clips.json not found. Run the full pipeline first.")
-        sys.exit(1)
-
-    with open(clips_json_path) as f:
-        clips = json.load(f)
-
-    clips_dir = work_dir / "clips"
-    if not clips_dir.exists():
-        print("Error: clips/ directory not found. Run the full pipeline first.")
-        sys.exit(1)
-
-    print("\n[Refresh] Checking for changes in clips.json...\n")
-
-    thumbnails_to_regenerate: list[tuple[int, dict]] = []
-    changes = False
-
-    for i, clip in enumerate(clips):
-        expected_name = clip_folder_name(i, clip["title"])
-        expected_folder = clips_dir / expected_name
-        title_changed = False
-
-        # Find existing folder by its index prefix (e.g. "01 - ")
-        prefix = f"{i + 1:02d} - "
-        existing_folders = [
-            f for f in clips_dir.iterdir()
-            if f.is_dir() and f.name.startswith(prefix)
-        ]
-
-        if not existing_folders:
-            print(f"  Warning: no folder found for clip {i + 1} ({prefix}*), skipping")
-            continue
-
-        existing_folder = existing_folders[0]
-
-        # --- Title change → rename folder ---
-        if existing_folder.name != expected_name:
-            print(f"  Title changed for clip {i + 1}:")
-            print(f"    Old: {existing_folder.name}")
-            print(f"    New: {expected_name}")
-            existing_folder.rename(expected_folder)
-            title_changed = True
-            changes = True
-
-            # Update stored paths
-            if (expected_folder / "video.mp4").exists():
-                clip["clip_path"] = str(expected_folder / "video.mp4")
-            if (expected_folder / "thumbnail.jpg").exists():
-                clip["thumbnail_path"] = str(expected_folder / "thumbnail.jpg")
-
-        folder = expected_folder
-
-        # --- Thumbnail prompt change detection ---
-        prompt_file = folder / ".thumbnail_prompt"
-        current_prompt = clip.get("thumbnail_prompt", "").strip()
-
-        prompt_changed = False
-        if prompt_file.exists():
-            saved_prompt = prompt_file.read_text().strip()
-            if saved_prompt != current_prompt:
-                print(f"  Thumbnail prompt changed for clip {i + 1}: {clip['title']}")
-                prompt_changed = True
-                changes = True
-        else:
-            # First refresh — save current prompt for future comparison
-            prompt_file.write_text(current_prompt)
-
-        # Check if thumbnail is missing
-        thumb_missing = not (folder / "thumbnail.jpg").exists()
-        if thumb_missing:
-            print(f"  Missing thumbnail for clip {i + 1}: {clip['title']}")
-            changes = True
-
-        # Queue thumbnail regeneration if title or prompt changed, missing, or --force
-        if title_changed or prompt_changed or thumb_missing or force:
-            thumbnails_to_regenerate.append((i, clip))
-
-    # --- Regenerate thumbnails in parallel ---
-    if thumbnails_to_regenerate:
-        if force:
-            changes = True
-        print(f"\n  Regenerating {len(thumbnails_to_regenerate)} thumbnail(s)...\n")
-        # Delete existing thumbnails so _generate_single_thumbnail doesn't skip them
-        for i, clip in thumbnails_to_regenerate:
-            thumb = clips_dir / clip_folder_name(i, clip["title"]) / "thumbnail.jpg"
-            if thumb.exists():
-                thumb.unlink()
-        tasks = [
-            (i, clip, clips_dir, api_key, template_path)
-            for i, clip in thumbnails_to_regenerate
-        ]
-        with ThreadPoolExecutor(max_workers=10) as pool:
-            for i, thumb_path in pool.map(_generate_single_thumbnail, tasks):
-                clip_ref = clips[i]
-                clip_ref["thumbnail_path"] = thumb_path
-                # Save the new prompt so next refresh knows the baseline
-                folder = clips_dir / clip_folder_name(i, clip_ref["title"])
-                prompt_file = folder / ".thumbnail_prompt"
-                prompt_file.write_text(clip_ref.get("thumbnail_prompt", ""))
-
-    if changes:
-        # Persist updated clips.json (may have new paths)
-        with open(clips_json_path, "w") as f:
-            json.dump(clips, f, indent=2)
-
-        # Refresh upload queue — remove old entries for this video and re-add
-        work_root = work_dir.parent
-        queue_file = work_root / "upload_queue.json"
-        work_dir_prefix = str(work_dir)
-        if queue_file.exists():
-            with open(queue_file) as f:
-                gq = json.load(f)
-            gq = [q for q in gq if not q.get("clip_path", "").startswith(work_dir_prefix)]
-            with open(queue_file, "w") as f:
-                json.dump(gq, f, indent=2)
-        save_queue(clips, work_root)
-
-        print(f"\n[Refresh] Done! Applied changes.")
-    else:
-        print("\n[Refresh] No changes detected.")
-
-
 def main():
     load_dotenv()
 
     parser = argparse.ArgumentParser(description="YouTube Clip Automation")
-    parser.add_argument("url", nargs="?", default=None, help="YouTube video URL (not needed for 'upload')")
-    parser.add_argument(
-        "command", nargs="?", default=None,
-        help="Optional command: 'refresh', 'upload'",
-    )
-    parser.add_argument(
-        "--reset", action="store_true", help="Reset and start from scratch"
-    )
-    parser.add_argument(
-        "--force", action="store_true",
-        help="With 'refresh': regenerate all thumbnails regardless of changes",
-    )
+    parser.add_argument("url", nargs="?", default=None, help="YouTube video URL, or 'upload' to upload from queue")
     parser.add_argument(
         "--step", type=int, choices=range(1, 7), metavar="N",
         help="Force restart from step N (1=download, 2=transcribe, 3=extract clips, 4=cut clips, 5=generate thumbnails, 6=save queue)",
@@ -900,7 +775,7 @@ def main():
     openrouter_key = os.environ.get("OPENROUTER_API_KEY", "")
     if not openrouter_key:
         parser.error("OPENROUTER_API_KEY environment variable not set")
-    if args.command != "refresh" and not assemblyai_key:
+    if not assemblyai_key:
         parser.error("ASSEMBLYAI_API_KEY environment variable not set")
 
     thumbnail_template = Path(
@@ -916,18 +791,6 @@ def main():
 
     print(f"URL: {args.url}")
     print(f"Work dir: {work_dir}")
-
-    # Handle refresh command
-    if args.command == "refresh":
-        refresh_clips(work_dir, openrouter_key, thumbnail_template, force=args.force)
-        return
-    elif args.command is not None:
-        parser.error(f"Unknown command: {args.command}")
-
-    # Handle reset
-    if args.reset and work_dir.exists():
-        shutil.rmtree(work_dir)
-        print("Reset: cleared previous output.")
 
     # Handle --step: delete outputs from that step onward so they re-run
     force_step = args.step
@@ -1009,19 +872,7 @@ def main():
         # Step 6: Save queue
         save_queue(clips, work_root)
 
-        print(f"\nProcessed {len(clips)} clips")
-        print(f"Output directory: {work_dir / 'clips'}")
-
-        clips_dir = work_dir / "clips"
-        if clips_dir.exists():
-            print(f"\nGenerated clips:")
-            for folder in sorted(clips_dir.iterdir()):
-                if folder.is_dir():
-                    print(f"\t{folder.name}/")
-                    for item in sorted(folder.iterdir()):
-                        if item.is_file():
-                            size_mb = item.stat().st_size / (1024 * 1024)
-                            print(f"\t  {item.name} ({size_mb:.1f} MB)")
+        print(f"\nDone — {len(clips)} clips in {work_dir / 'clips'}")
 
     except Exception as e:
         print(f"\nERROR: {e}")
