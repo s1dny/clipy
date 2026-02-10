@@ -15,15 +15,44 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 
+class ColoredFormatter(logging.Formatter):
+    """Custom formatter with ANSI color codes for log levels."""
+
+    COLORS = {
+        "DEBUG": "\033[36m",  # Cyan
+        "INFO": "\033[32m",  # Green
+        "WARNING": "\033[33m",  # Yellow
+        "ERROR": "\033[31m",  # Red
+        "CRITICAL": "\033[35m",  # Magenta
+        "RESET": "\033[0m",  # Reset
+    }
+
+    def format(self, record):
+        levelname = record.levelname
+        if levelname in self.COLORS:
+            record.levelname = (
+                f"{self.COLORS[levelname]}{levelname}{self.COLORS['RESET']}"
+            )
+        return super().format(record)
+
+
 def setup_logging():
-    """Configure logging with timestamp formatter."""
+    """Configure logging with timestamp formatter and colors."""
     handler = logging.StreamHandler()
-    formatter = logging.Formatter(
+
+    # Check if terminal supports colors
+    use_color = sys.stdout.isatty()
+
+    formatter_class = ColoredFormatter if use_color else logging.Formatter
+    formatter = formatter_class(
         "%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
     )
     handler.setFormatter(formatter)
+
     logger = logging.getLogger("blow")
-    logger.setLevel(logging.INFO)
+    # Enable debug by default, or control via env var
+    log_level = os.environ.get("BLOW_LOG_LEVEL", "DEBUG")
+    logger.setLevel(getattr(logging, log_level.upper(), logging.DEBUG))
     logger.addHandler(handler)
 
 
