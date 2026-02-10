@@ -1,6 +1,7 @@
 import argparse
 import base64
 import json
+import logging
 import os
 import random
 import re
@@ -12,6 +13,21 @@ import traceback
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+
+
+def setup_logging():
+    """Configure logging with timestamp formatter."""
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+    )
+    handler.setFormatter(formatter)
+    logger = logging.getLogger("blow")
+    logger.setLevel(logging.INFO)
+    logger.addHandler(handler)
+
+
+logger = logging.getLogger("blow")
 
 import assemblyai as aai
 import requests
@@ -51,12 +67,15 @@ def openrouter_request(api_key: str, body: dict, timeout: int) -> dict:
     """Make a request to OpenRouter API and return the parsed response."""
     resp = requests.post(
         OPENROUTER_API_URL,
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
         json=body,
         timeout=timeout,
     )
     if not resp.ok:
-        print(f"\tAPI error {resp.status_code}: {resp.text[:500]}")
+        logger.error(f"API error {resp.status_code}: {resp.text[:500]}")
         resp.raise_for_status()
     return resp.json()
 
@@ -73,7 +92,7 @@ def extract_video_id(url: str) -> str:
 
 def run_cmd(cmd: list[str], cwd: str | None = None) -> tuple[int, str, str]:
     """Run a command and return (returncode, stdout, stderr)"""
-    print(f"\tRunning: {' '.join(cmd[:5])}...")
+    logger.debug(f"Running: {' '.join(cmd[:5])}...")
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
     return result.returncode, result.stdout, result.stderr
 
@@ -82,7 +101,7 @@ def load_or_compute(path: Path, compute_fn, *args, skip_message: str | None = No
     """Load JSON from path if it exists, otherwise compute, save, and return."""
     if path.exists():
         if skip_message:
-            print(skip_message)
+            logger.info(skip_message)
         with open(path) as f:
             return json.load(f)
     result = compute_fn(*args)
@@ -93,7 +112,7 @@ def load_or_compute(path: Path, compute_fn, *args, skip_message: str | None = No
 
 def download_video(youtube_url: str, work_dir: Path) -> tuple[Path, Path]:
     """Download video from YouTube and extract audio with ffmpeg"""
-    print("\n[1/6] Downloading video and extracting audio...")
+    logger.info("[1/6] Downloading video and extracting audio...")
 
     work_dir.mkdir(parents=True, exist_ok=True)
 
@@ -114,7 +133,7 @@ def download_video(youtube_url: str, work_dir: Path) -> tuple[Path, Path]:
         ]
     )
     if code != 0:
-        print(f"\tError downloading video: {err}")
+        logger.error(f"Error downloading video: {err}")
         raise Exception(f"yt-dlp video failed: {err}")
 
     # Find the actual video file (yt-dlp may modify filename)
@@ -142,17 +161,17 @@ def download_video(youtube_url: str, work_dir: Path) -> tuple[Path, Path]:
         ]
     )
     if code != 0:
-        print(f"\tError extracting audio: {err}")
+        logger.error(f"Error extracting audio: {err}")
         raise Exception(f"ffmpeg audio extraction failed: {err}")
 
-    print(f"\tVideo: {video_path}")
-    print(f"\tAudio: {audio_path}")
+    logger.info(f"Video: {video_path}")
+    logger.info(f"Audio: {audio_path}")
     return video_path, audio_path
 
 
 def transcribe_audio(audio_path: Path, api_key: str) -> dict:
     """Upload audio to AssemblyAI and get transcript with speaker diarization."""
-    print("\n[2/6] Transcribing audio with AssemblyAI...")
+    logger.info("[2/6] Transcribing audio with AssemblyAI...")
 
     # Use SDK for submission (handles file upload), then poll via REST for reliability
     aai.settings.api_key = api_key
@@ -163,7 +182,7 @@ def transcribe_audio(audio_path: Path, api_key: str) -> dict:
         auto_chapters=False,
     )
 
-    print(f"\tStarting transcription with {ASSEMBLYAI_SPEECH_MODELS[0]}")
+    logger.debug(f"Starting transcription with {ASSEMBLYAI_SPEECH_MODELS[0]}")
 
     transcriber = aai.Transcriber(config=config)
     transcript = transcriber.submit(str(audio_path))
@@ -171,7 +190,7 @@ def transcribe_audio(audio_path: Path, api_key: str) -> dict:
     transcript_id = transcript.id
     if transcript_id is None:
         raise RuntimeError("Transcript ID is None after submission")
-    print(f"\tTranscript ID: {transcript_id}")
+    logger.debug(f"Transcript ID: {transcript_id}")
 
     poll_url = f"https://api.assemblyai.com/v2/transcript/{transcript_id}"
     poll_headers = {"authorization": api_key}
@@ -191,22 +210,30 @@ def transcribe_audio(audio_path: Path, api_key: str) -> dict:
             resp.raise_for_status()
             data = resp.json()
         except requests.RequestException as e:
-            print(f"\n\tWarning: poll request failed ({e}), retrying...")
+            logger.warning(f"poll request failed ({e}), retrying...")
             time.sleep(5)
             continue
 
         status = data["status"]
-        print(
-            f"\r\tStatus: {status} | Elapsed: {mins:02d}:{secs:02d}",
-            end="",
-            flush=True,
-        )
+        # Real-time status line - use print with \r for terminal UX, only if not logging to file
+        if sys.stdout.isatty():
+            print(
+                f"\r\tStatus: {status} | Elapsed: {mins:02d}:{secs:02d}",
+                end="",
+                flush=True,
+            )
 
         if status == "completed":
-            print(f"\r\tTranscription complete ({mins:02d}:{secs:02d})              ")
+            if sys.stdout.isatty():
+                print(
+                    f"\r\tTranscription complete ({mins:02d}:{secs:02d})              "
+                )
+            logger.info(f"Transcription complete ({mins:02d}:{secs:02d})")
             return data
         elif status == "error":
-            print(f"\r\tTranscription failed after {mins:02d}:{secs:02d}")
+            if sys.stdout.isatty():
+                print(f"\r\tTranscription failed after {mins:02d}:{secs:02d}")
+            logger.error(f"Transcription failed after {mins:02d}:{secs:02d}")
             raise RuntimeError(
                 f"Transcription failed: {data.get('error', 'Unknown error')}"
             )
@@ -220,32 +247,43 @@ def build_sentence_transcript(transcript: dict) -> list[dict]:
     for u in transcript.get("utterances", []):
         words = u.get("words", [])
         if not words:
-            sentences.append({"speaker": u["speaker"], "text": u["text"], "start": u["start"], "end": u["end"]})
+            sentences.append(
+                {
+                    "speaker": u["speaker"],
+                    "text": u["text"],
+                    "start": u["start"],
+                    "end": u["end"],
+                }
+            )
             continue
         buf = []
         for w in words:
             buf.append(w)
             if w["text"].rstrip().endswith((".", "?", "!")):
-                sentences.append({
+                sentences.append(
+                    {
+                        "speaker": u["speaker"],
+                        "text": " ".join(b["text"] for b in buf),
+                        "start": buf[0]["start"],
+                        "end": buf[-1]["end"],
+                    }
+                )
+                buf = []
+        if buf:
+            sentences.append(
+                {
                     "speaker": u["speaker"],
                     "text": " ".join(b["text"] for b in buf),
                     "start": buf[0]["start"],
                     "end": buf[-1]["end"],
-                })
-                buf = []
-        if buf:
-            sentences.append({
-                "speaker": u["speaker"],
-                "text": " ".join(b["text"] for b in buf),
-                "start": buf[0]["start"],
-                "end": buf[-1]["end"],
-            })
+                }
+            )
     return sentences
 
 
 def extract_clips(sentences: list[dict], api_key: str) -> list[dict]:
     """Use LLM to extract interesting clip segments from sentence transcript"""
-    print("\n[3/6] Extracting clip segments with LLM...")
+    logger.info("[3/6] Extracting clip segments with LLM...")
 
     transcript_text = json.dumps(sentences)
 
@@ -259,23 +297,27 @@ Transcript:
 """
     )
 
-    print(f"\tUsing model: {CLIP_MODEL}")
-    data = openrouter_request(api_key, {
-        "model": CLIP_MODEL,
-        "messages": [
-            {"role": "system", "content": LLM_SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
-        ],
-        "provider": {"sort": "price"},
-        "thinking": {"type": "enabled", "budget_tokens": 100000},
-    }, CLIP_EXTRACTION_TIMEOUT)
+    logger.debug(f"Using model: {CLIP_MODEL}")
+    data = openrouter_request(
+        api_key,
+        {
+            "model": CLIP_MODEL,
+            "messages": [
+                {"role": "system", "content": LLM_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            "provider": {"sort": "price"},
+            "thinking": {"type": "enabled", "budget_tokens": 100000},
+        },
+        CLIP_EXTRACTION_TIMEOUT,
+    )
 
     content = data["choices"][0]["message"]["content"]
 
     try:
         clips = json.loads(content)["clips"]
     except (json.JSONDecodeError, KeyError):
-        print(f"\tWarning: JSON parse error, attempting to fix...")
+        logger.warning("JSON parse error, attempting to fix...")
         # Try to extract JSON from markdown code blocks
         json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
         if json_match:
@@ -288,29 +330,33 @@ Transcript:
             if json_match:
                 clips = json.loads(json_match.group(0))["clips"]
             else:
-                print(f"\tError: Could not parse LLM response")
-                print(f"\tRaw content: {content[:500]}...")
+                logger.error("Could not parse LLM response")
+                logger.debug(f"Raw content: {content[:500]}...")
                 raise
 
-    print(f"\tFound {len(clips)} clips:")
+    logger.info(f"Found {len(clips)} clips:")
     for i, clip in enumerate(clips):
         duration_min = (clip["end_ms"] - clip["start_ms"]) / 60000
-        print(f"\t  {i + 1}. {clip['title']} ({duration_min:.1f}m)")
+        logger.info(f"  {i + 1}. {clip['title']} ({duration_min:.1f}m)")
 
     return clips
 
 
 def generate_illustration(prompt: str, output_path: Path, api_key: str) -> bool:
     """Generate an illustration to be composited onto thumbnail template"""
-    print(f"\tGenerating illustration: {output_path.name}...")
+    logger.info(f"Generating illustration: {output_path.name}...")
 
     try:
         illustration_prompt = ILLUSTRATION_PROMPT_TEMPLATE.format(prompt=prompt)
-        data = openrouter_request(api_key, {
-            "model": IMAGE_MODEL,
-            "messages": [{"role": "user", "content": illustration_prompt}],
-            "provider": {"sort": "price"},
-        }, IMAGE_GENERATION_TIMEOUT)
+        data = openrouter_request(
+            api_key,
+            {
+                "model": IMAGE_MODEL,
+                "messages": [{"role": "user", "content": illustration_prompt}],
+                "provider": {"sort": "price"},
+            },
+            IMAGE_GENERATION_TIMEOUT,
+        )
 
         message = data["choices"][0]["message"]
 
@@ -326,20 +372,22 @@ def generate_illustration(prompt: str, output_path: Path, api_key: str) -> bool:
                     f.write(img_bytes)
                 return True
 
-        print(f"\tNo image in response")
+        logger.error("No image in response")
         return False
 
     except Exception as e:
-        print(f"\tIllustration generation failed: {e}")
+        logger.error(f"Illustration generation failed: {e}")
         return False
 
 
-def composite_thumbnail(illustration_path: Path, output_path: Path, template_path: Path) -> bool:
+def composite_thumbnail(
+    illustration_path: Path, output_path: Path, template_path: Path
+) -> bool:
     """Crop illustration to non-white content, scale, and center on template."""
-    print(f"\tCompositing thumbnail: {output_path.name}...")
+    logger.info(f"Compositing thumbnail: {output_path.name}...")
 
     if not template_path.exists():
-        print(f"\tError: Thumbnail template not found at {template_path}")
+        logger.error(f"Thumbnail template not found at {template_path}")
         return False
 
     try:
@@ -351,12 +399,14 @@ def composite_thumbnail(illustration_path: Path, output_path: Path, template_pat
         threshold = 220
         # Mask: alpha > 10 and any RGB channel below threshold
         mask = (arr[:, :, 3] > 10) & (
-            (arr[:, :, 0] < threshold) | (arr[:, :, 1] < threshold) | (arr[:, :, 2] < threshold)
+            (arr[:, :, 0] < threshold)
+            | (arr[:, :, 1] < threshold)
+            | (arr[:, :, 2] < threshold)
         )
         coords = np.argwhere(mask)
 
         if coords.size == 0:
-            print(f"\tNo non-white content found in illustration")
+            logger.error("No non-white content found in illustration")
             return False
 
         # Crop to content (argwhere returns [row, col] = [y, x])
@@ -377,7 +427,7 @@ def composite_thumbnail(illustration_path: Path, output_path: Path, template_pat
         return True
 
     except Exception as e:
-        print(f"\tThumbnail compositing failed: {e}")
+        logger.error(f"Thumbnail compositing failed: {e}")
         return False
 
 
@@ -389,11 +439,14 @@ def cut_clip(
     duration_sec = (end_ms - start_ms) / 1000
 
     # Use input seeking for faster processing and accurate cutting
+    # Hardware-accelerated decode + encode via Apple VideoToolbox (M-series)
     # Map both video from video file and audio from audio file
     code, out, err = run_cmd(
         [
             FFMPEG,
             "-y",
+            "-hwaccel",
+            "videotoolbox",
             "-ss",
             str(start_sec),
             "-t",
@@ -414,10 +467,18 @@ def cut_clip(
             "h264_videotoolbox",
             "-b:v",
             "8M",
+            "-profile:v",
+            "high",
+            "-allow_sw",
+            "1",
+            "-realtime",
+            "0",
             "-c:a",
-            "aac",
+            "aac_at",
             "-b:a",
             "192k",
+            "-q:a",
+            "127",
             "-movflags",
             "+faststart",
             str(output_path),
@@ -425,7 +486,7 @@ def cut_clip(
     )
 
     if code != 0:
-        print(f"\tFFmpeg error: {err}")
+        logger.error(f"FFmpeg error: {err}")
         return False
     return True
 
@@ -440,7 +501,7 @@ def cut_clips(
     video_path: Path, audio_path: Path, clips: list[dict], work_dir: Path
 ) -> list[dict]:
     """Cut clips from the source video. Detects title changes and renames folders."""
-    print("\n[4/6] Cutting clips...")
+    logger.info("[4/6] Cutting clips...")
 
     clips_dir = work_dir / "clips"
     clips_dir.mkdir(exist_ok=True)
@@ -450,9 +511,11 @@ def cut_clips(
         prefix = f"{i + 1:02d} - "
 
         # Rename folder if title changed
-        existing = [f for f in clips_dir.iterdir() if f.is_dir() and f.name.startswith(prefix)]
+        existing = [
+            f for f in clips_dir.iterdir() if f.is_dir() and f.name.startswith(prefix)
+        ]
         if existing and existing[0].name != expected_name:
-            print(f"\tTitle changed for clip {i + 1}: renaming folder")
+            logger.info(f"Title changed for clip {i + 1}: renaming folder")
             existing[0].rename(clips_dir / expected_name)
 
         folder = clips_dir / expected_name
@@ -460,11 +523,13 @@ def cut_clips(
         clip_path = folder / "video.mp4"
 
         if clip_path.exists():
-            print(f"\tSkipping clip {i + 1}: {clip['title']} (already cut)")
+            logger.info(f"Skipping clip {i + 1}: {clip['title']} (already cut)")
             clip["clip_path"] = str(clip_path)
         else:
-            print(f"\tCutting clip {i + 1}: {clip['title']}...")
-            if cut_clip(video_path, audio_path, clip["start_ms"], clip["end_ms"], clip_path):
+            logger.info(f"Cutting clip {i + 1}: {clip['title']}...")
+            if cut_clip(
+                video_path, audio_path, clip["start_ms"], clip["end_ms"], clip_path
+            ):
                 clip["clip_path"] = str(clip_path)
             else:
                 clip["clip_path"] = None
@@ -480,12 +545,14 @@ def _generate_single_thumbnail(args: tuple) -> tuple[int, str | None]:
     thumb_path = folder / "thumbnail.jpg"
 
     if thumb_path.exists():
-        print(f"\tSkipping clip {i + 1}: {clip['title']} (thumbnail exists)")
+        logger.info(f"Skipping clip {i + 1}: {clip['title']} (thumbnail exists)")
         return i, str(thumb_path)
 
     illustration_path = folder / "_temp_illustration.png"
     try:
-        if generate_illustration(clip.get("thumbnail_prompt", clip["title"]), illustration_path, api_key):
+        if generate_illustration(
+            clip.get("thumbnail_prompt", clip["title"]), illustration_path, api_key
+        ):
             if composite_thumbnail(illustration_path, thumb_path, template_path):
                 return i, str(thumb_path)
         return i, None
@@ -494,9 +561,11 @@ def _generate_single_thumbnail(args: tuple) -> tuple[int, str | None]:
             illustration_path.unlink()
 
 
-def generate_thumbnails(clips: list[dict], work_dir: Path, api_key: str, template_path: Path) -> list[dict]:
+def generate_thumbnails(
+    clips: list[dict], work_dir: Path, api_key: str, template_path: Path
+) -> list[dict]:
     """Generate thumbnails for each clip in parallel. Detects prompt changes and missing thumbnails."""
-    print("\n[5/6] Generating thumbnails...")
+    logger.info("[5/6] Generating thumbnails...")
 
     clips_dir = work_dir / "clips"
 
@@ -510,13 +579,15 @@ def generate_thumbnails(clips: list[dict], work_dir: Path, api_key: str, templat
 
         if prompt_file.exists():
             if prompt_file.read_text().strip() != current_prompt:
-                print(f"\tPrompt changed for clip {i + 1}: {clip['title']}")
+                logger.info(f"Prompt changed for clip {i + 1}: {clip['title']}")
                 thumb = folder / "thumbnail.jpg"
                 if thumb.exists():
                     thumb.unlink()
         prompt_file.write_text(current_prompt)
 
-    tasks = [(i, clip, clips_dir, api_key, template_path) for i, clip in enumerate(clips)]
+    tasks = [
+        (i, clip, clips_dir, api_key, template_path) for i, clip in enumerate(clips)
+    ]
 
     with ThreadPoolExecutor(max_workers=10) as pool:
         for i, thumb_path in pool.map(_generate_single_thumbnail, tasks):
@@ -527,7 +598,7 @@ def generate_thumbnails(clips: list[dict], work_dir: Path, api_key: str, templat
 
 def save_queue(clips: list[dict], work_root: Path):
     """Save clips to the global upload queue in the output directory."""
-    print("\n[6/6] Saving to upload queue...")
+    logger.info("[6/6] Saving to upload queue...")
 
     queue_file = work_root / "upload_queue.json"
 
@@ -539,20 +610,22 @@ def save_queue(clips: list[dict], work_root: Path):
     existing_paths = {q["clip_path"] for q in queue}
     for clip in clips:
         if clip.get("clip_path") and clip["clip_path"] not in existing_paths:
-            queue.append({
-                "title": clip["title"],
-                "description": clip["description"],
-                "clip_path": clip["clip_path"],
-                "thumbnail_path": clip.get("thumbnail_path"),
-                "status": "pending",
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            })
+            queue.append(
+                {
+                    "title": clip["title"],
+                    "description": clip["description"],
+                    "clip_path": clip["clip_path"],
+                    "thumbnail_path": clip.get("thumbnail_path"),
+                    "status": "pending",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
 
     with open(queue_file, "w") as f:
         json.dump(queue, f, indent=2)
 
-    print(f"\tQueue saved: {queue_file}")
-    print(f"\tTotal clips in queue: {len(queue)}")
+    logger.info(f"Queue saved: {queue_file}")
+    logger.info(f"Total clips in queue: {len(queue)}")
 
 
 YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
@@ -566,7 +639,9 @@ def get_youtube_service(work_root: Path):
 
     token_path = work_root / ".youtube_token.json"
     client_secrets = Path(
-        os.environ.get("YOUTUBE_CLIENT_SECRETS", Path(__file__).parent / "client_secrets.json")
+        os.environ.get(
+            "YOUTUBE_CLIENT_SECRETS", Path(__file__).parent / "client_secrets.json"
+        )
     )
 
     creds = None
@@ -576,14 +651,17 @@ def get_youtube_service(work_root: Path):
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             from google.auth.transport.requests import Request
+
             creds.refresh(Request())
         else:
             if not client_secrets.exists():
-                print(f"Error: YouTube client secrets not found at {client_secrets}")
-                print("Download OAuth 2.0 credentials from Google Cloud Console")
-                print("and save as client_secrets.json in the project root.")
+                logger.error(f"YouTube client secrets not found at {client_secrets}")
+                logger.error("Download OAuth 2.0 credentials from Google Cloud Console")
+                logger.error("and save as client_secrets.json in the project root.")
                 sys.exit(1)
-            flow = InstalledAppFlow.from_client_secrets_file(str(client_secrets), YOUTUBE_SCOPES)
+            flow = InstalledAppFlow.from_client_secrets_file(
+                str(client_secrets), YOUTUBE_SCOPES
+            )
             creds = flow.run_local_server(port=0)
 
         with open(token_path, "w") as f:
@@ -601,10 +679,10 @@ def upload_single_video(youtube, item: dict) -> bool:
     thumbnail_path = item.get("thumbnail_path")
 
     if not video_path or not Path(video_path).exists():
-        print(f"  Skipping '{title}': video file not found at {video_path}")
+        logger.warning(f"Skipping '{title}': video file not found at {video_path}")
         return False
 
-    print(f"  Uploading: {title}...")
+    logger.info(f"Uploading: {title}...")
 
     # Extract original video ID from clip_path: .../output/<video_id>/clips/...
     clip_parts = Path(video_path).parts
@@ -613,7 +691,9 @@ def upload_single_video(youtube, item: dict) -> bool:
         source_video_id = clip_parts[clips_idx - 1]
     except (ValueError, IndexError):
         source_video_id = None
-    original_url = f"https://youtube.com/watch?v={source_video_id}" if source_video_id else ""
+    original_url = (
+        f"https://youtube.com/watch?v={source_video_id}" if source_video_id else ""
+    )
 
     description = (
         f"Support me on Ko-fi: https://ko-fi.com/jonathanblowclips\n"
@@ -635,7 +715,7 @@ def upload_single_video(youtube, item: dict) -> bool:
             "privacyStatus": "private",
             "publishAt": publish_at,
         }
-        print(f"  Scheduled to publish: {scheduled_date}")
+        logger.info(f"Scheduled to publish: {scheduled_date}")
     else:
         status_body = {
             "privacyStatus": "unlisted",
@@ -653,12 +733,18 @@ def upload_single_video(youtube, item: dict) -> bool:
     from tqdm import tqdm
 
     file_size = Path(video_path).stat().st_size
-    media = MediaFileUpload(video_path, mimetype="video/mp4", resumable=True, chunksize=10 * 1024 * 1024)
+    media = MediaFileUpload(
+        video_path, mimetype="video/mp4", resumable=True, chunksize=10 * 1024 * 1024
+    )
 
     try:
-        request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
+        request = youtube.videos().insert(
+            part="snippet,status", body=body, media_body=media
+        )
         response = None
-        with tqdm(total=file_size, unit="B", unit_scale=True, desc="    Uploading") as pbar:
+        with tqdm(
+            total=file_size, unit="B", unit_scale=True, desc="    Uploading"
+        ) as pbar:
             while response is None:
                 prev = pbar.n
                 status, response = request.next_chunk()
@@ -668,7 +754,7 @@ def upload_single_video(youtube, item: dict) -> bool:
         video_id = response["id"]
         item["youtube_id"] = video_id
         item["youtube_url"] = f"https://youtube.com/watch?v={video_id}"
-        print(f"  Done: {item['youtube_url']}")
+        logger.info(f"Done: {item['youtube_url']}")
 
         # Set thumbnail
         if thumbnail_path and Path(thumbnail_path).exists():
@@ -677,21 +763,21 @@ def upload_single_video(youtube, item: dict) -> bool:
                     videoId=video_id,
                     media_body=MediaFileUpload(thumbnail_path, mimetype="image/jpeg"),
                 ).execute()
-                print(f"  Thumbnail set")
+                logger.info("Thumbnail set")
             except Exception as e:
-                print(f"  Warning: Could not set thumbnail: {e}")
+                logger.warning(f"Could not set thumbnail: {e}")
 
         return True
 
     except Exception as e:
-        print(f"  Upload failed for '{title}': {e}")
+        logger.error(f"Upload failed for '{title}': {e}")
         return False
 
 
 def upload_from_queue(queue_file: Path):
     """Process the upload queue: assign dates and upload due videos."""
     if not queue_file.exists():
-        print("No upload queue found. Run the pipeline first.")
+        logger.warning("No upload queue found. Run the pipeline first.")
         return
 
     with open(queue_file) as f:
@@ -699,7 +785,7 @@ def upload_from_queue(queue_file: Path):
 
     pending = [q for q in queue if q["status"] == "pending"]
     if not pending:
-        print("No pending uploads in queue.")
+        logger.info("No pending uploads in queue.")
         return
 
     # Assign scheduled dates to unscheduled items (random order, one per day at 00:00 UTC)
@@ -708,7 +794,8 @@ def upload_from_queue(queue_file: Path):
         random.shuffle(unscheduled)
         existing_dates = [
             datetime.fromisoformat(q["scheduled_date"]).date()
-            for q in queue if q.get("scheduled_date")
+            for q in queue
+            if q.get("scheduled_date")
         ]
         if existing_dates:
             next_date = max(existing_dates) + timedelta(days=1)
@@ -723,9 +810,9 @@ def upload_from_queue(queue_file: Path):
             json.dump(queue, f, indent=2)
 
     # Upload all pending clips sequentially
-    print(f"\n{len(pending)} clip(s) to upload:")
+    logger.info(f"{len(pending)} clip(s) to upload:")
     for item in pending:
-        print(f"  {item.get('scheduled_date', 'unscheduled')}: {item['title']}")
+        logger.info(f"  {item.get('scheduled_date', 'unscheduled')}: {item['title']}")
 
     # Authenticate with YouTube
     youtube = get_youtube_service(queue_file.parent)
@@ -743,16 +830,25 @@ def upload_from_queue(queue_file: Path):
             json.dump(queue, f, indent=2)
 
     uploaded = sum(1 for item in pending if item["status"] == "uploaded")
-    print(f"\nUploaded {uploaded}/{len(pending)} clip(s)")
+    logger.info(f"Uploaded {uploaded}/{len(pending)} clip(s)")
 
 
 def main():
+    setup_logging()
     load_dotenv()
 
     parser = argparse.ArgumentParser(description="YouTube Clip Automation")
-    parser.add_argument("url", nargs="?", default=None, help="YouTube video URL, or 'upload' to upload from queue")
     parser.add_argument(
-        "--step", type=int, choices=range(1, 7), metavar="N",
+        "url",
+        nargs="?",
+        default=None,
+        help="YouTube video URL, or 'upload' to upload from queue",
+    )
+    parser.add_argument(
+        "--step",
+        type=int,
+        choices=range(1, 7),
+        metavar="N",
         help="Force restart from step N (1=download, 2=transcribe, 3=extract clips, 4=cut clips, 5=generate thumbnails, 6=save queue)",
     )
     args = parser.parse_args()
@@ -783,14 +879,14 @@ def main():
     )
 
     if not thumbnail_template.exists():
-        print(f"Warning: Thumbnail template not found at {thumbnail_template}")
-        print("Thumbnails will be generated without the template overlay.")
+        logger.warning(f"Thumbnail template not found at {thumbnail_template}")
+        logger.info("Thumbnails will be generated without the template overlay.")
 
     folder_name = extract_video_id(args.url)
     work_dir = work_root / folder_name
 
-    print(f"URL: {args.url}")
-    print(f"Work dir: {work_dir}")
+    logger.info(f"URL: {args.url}")
+    logger.info(f"Work dir: {work_dir}")
 
     # Handle --step: delete outputs from that step onward so they re-run
     force_step = args.step
@@ -826,10 +922,14 @@ def main():
                 if global_queue_file.exists():
                     with open(global_queue_file) as f:
                         gq = json.load(f)
-                    gq = [q for q in gq if not q.get("clip_path", "").startswith(str(work_dir))]
+                    gq = [
+                        q
+                        for q in gq
+                        if not q.get("clip_path", "").startswith(str(work_dir))
+                    ]
                     with open(global_queue_file, "w") as f:
                         json.dump(gq, f, indent=2)
-        print(f"Forcing re-run from step {force_step}.")
+        logger.info(f"Forcing re-run from step {force_step}.")
 
     work_dir.mkdir(parents=True, exist_ok=True)
 
@@ -838,28 +938,33 @@ def main():
         video_path = work_dir / "video.mp4"
         audio_path = work_dir / "audio.mp3"
         if video_path.exists() and audio_path.exists():
-            print("\n[1/6] Downloading video and extracting audio")
-            print("\tSkipping: video and audio already exist")
+            logger.info("[1/6] Downloading video and extracting audio")
+            logger.info("Skipping: video and audio already exist")
         else:
             video_path, audio_path = download_video(args.url, work_dir)
 
         # Step 2: Transcribe
         transcript = load_or_compute(
             work_dir / "transcript.json",
-            transcribe_audio, audio_path, assemblyai_key,
+            transcribe_audio,
+            audio_path,
+            assemblyai_key,
             skip_message="\n[2/6] Transcribing audio with AssemblyAI...\n\tSkipping: transcript already exists",
         )
 
         # Build sentence-level transcript
         sentences = load_or_compute(
             work_dir / "sentences.json",
-            build_sentence_transcript, transcript,
+            build_sentence_transcript,
+            transcript,
         )
 
         # Step 3: Extract clips with LLM
         clips = load_or_compute(
             work_dir / "clips.json",
-            extract_clips, sentences, openrouter_key,
+            extract_clips,
+            sentences,
+            openrouter_key,
             skip_message="\n[3/6] Extracting clip segments with LLM...\n\tSkipping: clips already extracted",
         )
 
@@ -872,12 +977,12 @@ def main():
         # Step 6: Save queue
         save_queue(clips, work_root)
 
-        print(f"\nDone — {len(clips)} clips in {work_dir / 'clips'}")
+        logger.info(f"Done — {len(clips)} clips in {work_dir / 'clips'}")
 
     except Exception as e:
-        print(f"\nERROR: {e}")
+        logger.error(f"ERROR: {e}")
         traceback.print_exc()
-        print(f"\nRe-run with the same URL to resume from the last successful step.")
+        logger.info("Re-run with the same URL to resume from the last successful step.")
         sys.exit(1)
 
 

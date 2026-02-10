@@ -1,6 +1,0 @@
-- [x] https://www.youtube.com/watch?v=1blhmslxkWg 
-- [x] https://www.youtube.com/watch?v=e6crOMC9WCE
-- [x] https://www.youtube.com/watch?v=bdr3056fXVs
-- [ ] https://www.youtube.com/watch?v=yNdRv5LFuQk
-- [ ] https://www.youtube.com/watch?v=vHfdUqLmPNU
-- [ ] https://www.youtube.com/watch?v=Wl6JiKbJyeM

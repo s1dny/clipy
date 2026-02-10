@@ -19,8 +19,8 @@ IMAGE_GENERATION_TIMEOUT = 120  # seconds, image generation per request
 
 # Thumbnail settings
 ILLUSTRATION_SIZE = (700, 700)  # (width, height) to scale cropped illustration to
-ILLUSTRATION_CENTER_X = 850    # x coordinate to center illustration on template
-ILLUSTRATION_CENTER_Y = 350    # y coordinate to center illustration on template
+ILLUSTRATION_CENTER_X = 850  # x coordinate to center illustration on template
+ILLUSTRATION_CENTER_Y = 350  # y coordinate to center illustration on template
 
 # Prompts
 CLIP_EXTRACTION_PROMPT_TEMPLATE = """
