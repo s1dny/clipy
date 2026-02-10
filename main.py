@@ -68,14 +68,6 @@ from config import (
     IMAGE_GENERATION_TIMEOUT,
 )
 
-# Constants
-YT_DLP = [sys.executable, "-m", "yt_dlp"]
-YT_DLP_FORMAT = "bv*+ba/b"
-YT_DLP_AUDIO_QUALITY = "0"
-LLM_SYSTEM_PROMPT = (
-    "You are an expert video editor. Return ONLY valid JSON, no markdown."
-)
-
 
 def openrouter_request(api_key: str, body: dict, timeout: int) -> dict:
     """Make a request to OpenRouter API and return the parsed response."""
@@ -106,7 +98,10 @@ def extract_video_id(url: str) -> str:
 
 def run_cmd(cmd: list[str], cwd: str | None = None) -> tuple[int, str, str]:
     """Run a command and return (returncode, stdout, stderr)"""
-    logger.debug(f"Running: {' '.join(cmd[:5])}...")
+    cmd_str = " ".join(cmd)
+    if len(cmd_str) > 64:
+        cmd_str = cmd_str[:61] + "..."
+    logger.debug(f"Running: {cmd_str}")
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
     return result.returncode, result.stdout, result.stderr
 
@@ -134,15 +129,15 @@ def download_video(youtube_url: str, work_dir: Path) -> tuple[Path, Path]:
     video_path = work_dir / "video.mp4"
     code, out, err = run_cmd(
         [
-            *YT_DLP,
+            *[sys.executable, "-m", "yt_dlp"],
             "-f",
-            YT_DLP_FORMAT,
+            "bv*+ba/b",
             "-o",
             str(video_path),
             "--merge-output-format",
             "mp4",
             "--audio-quality",
-            YT_DLP_AUDIO_QUALITY,
+            "0",
             youtube_url,
         ]
     )
@@ -238,10 +233,6 @@ def transcribe_audio(audio_path: Path, api_key: str) -> dict:
             )
 
         if status == "completed":
-            if sys.stdout.isatty():
-                print(
-                    f"\r\tTranscription complete ({mins:02d}:{secs:02d})              "
-                )
             logger.info(f"Transcription complete ({mins:02d}:{secs:02d})")
             return data
         elif status == "error":
@@ -317,7 +308,7 @@ Transcript:
         {
             "model": CLIP_MODEL,
             "messages": [
-                {"role": "system", "content": LLM_SYSTEM_PROMPT},
+                {"role": "system", "content": "You are an expert video editor. Return ONLY valid JSON, no markdown."},
                 {"role": "user", "content": prompt},
             ],
             "provider": {"sort": "price"},
@@ -351,7 +342,7 @@ Transcript:
     logger.info(f"Found {len(clips)} clips:")
     for i, clip in enumerate(clips):
         duration_min = (clip["end_ms"] - clip["start_ms"]) / 60000
-        logger.info(f"  {i + 1}. {clip['title']} ({duration_min:.1f}m)")
+        logger.info(f"{i + 1}. {clip['title']} ({duration_min:.1f}m)")
 
     return clips
 
@@ -452,9 +443,6 @@ def cut_clip(
     start_sec = start_ms / 1000
     duration_sec = (end_ms - start_ms) / 1000
 
-    # Use input seeking for faster processing and accurate cutting
-    # Hardware-accelerated decode + encode via Apple VideoToolbox (M-series)
-    # Map both video from video file and audio from audio file
     code, out, err = run_cmd(
         [
             FFMPEG,
