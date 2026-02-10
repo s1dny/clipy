@@ -42,6 +42,12 @@ The first run of `upload` will open a browser for OAuth consent. The token is ca
 ### Full pipeline
 
 ```bash
+./blow <youtube-url>
+```
+
+Or with `uv run`:
+
+```bash
 uv run main.py <youtube-url>
 ```
 
@@ -57,6 +63,12 @@ This runs all 6 steps:
 Results are cached per step, so re-running the same URL resumes from where it left off. Changes to `clips.json` (titles, thumbnail prompts) and missing thumbnails are detected automatically on re-run.
 
 ### Upload to YouTube
+
+```bash
+./blow upload
+```
+
+Or with `uv run`:
 
 ```bash
 uv run main.py upload

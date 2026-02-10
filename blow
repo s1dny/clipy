@@ -1,0 +1,11 @@
+#!/bin/bash
+
+# Blow - YouTube Clip Automation
+# Usage: ./blow <youtube-url> or ./blow upload
+
+if [ $# -eq 0 ]; then
+    echo "Usage: ./blow <youtube-url> or ./blow upload"
+    exit 1
+fi
+
+uv run main.py "$@"
