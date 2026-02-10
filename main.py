@@ -2,13 +2,14 @@ import argparse
 import base64
 import json
 import os
+import random
 import re
 import shutil
 import subprocess
 import sys
 import time
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -520,29 +521,213 @@ def generate_thumbnails(clips: list[dict], work_dir: Path, api_key: str, templat
     return clips
 
 
-def save_queue(clips: list[dict], work_dir: Path):
-    """Save clips to upload queue"""
+def save_queue(clips: list[dict], work_root: Path):
+    """Save clips to the global upload queue in the output directory."""
     print("\n[6/6] Saving to upload queue...")
 
-    queue_file = work_dir / "upload_queue.json"
+    queue_file = work_root / "upload_queue.json"
 
     queue = []
     if queue_file.exists():
         with open(queue_file) as f:
             queue = json.load(f)
 
-    existing = {(q["start_ms"], q["end_ms"]) for q in queue}
+    existing_paths = {q["clip_path"] for q in queue}
     for clip in clips:
-        if (clip["start_ms"], clip["end_ms"]) not in existing:
-            queue.append(
-                {**clip, "status": "pending", "created_at": datetime.now().isoformat()}
-            )
+        if clip.get("clip_path") and clip["clip_path"] not in existing_paths:
+            queue.append({
+                "title": clip["title"],
+                "description": clip["description"],
+                "clip_path": clip["clip_path"],
+                "thumbnail_path": clip.get("thumbnail_path"),
+                "status": "pending",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
 
     with open(queue_file, "w") as f:
         json.dump(queue, f, indent=2)
 
     print(f"\tQueue saved: {queue_file}")
     print(f"\tTotal clips in queue: {len(queue)}")
+
+
+YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+
+
+def get_youtube_service(work_root: Path):
+    """Authenticate with YouTube API and return service object."""
+    from google.oauth2.credentials import Credentials
+    from google_auth_oauthlib.flow import InstalledAppFlow
+    from googleapiclient.discovery import build
+
+    token_path = work_root / ".youtube_token.json"
+    client_secrets = Path(
+        os.environ.get("YOUTUBE_CLIENT_SECRETS", Path(__file__).parent / "client_secrets.json")
+    )
+
+    creds = None
+    if token_path.exists():
+        creds = Credentials.from_authorized_user_file(str(token_path), YOUTUBE_SCOPES)
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            from google.auth.transport.requests import Request
+            creds.refresh(Request())
+        else:
+            if not client_secrets.exists():
+                print(f"Error: YouTube client secrets not found at {client_secrets}")
+                print("Download OAuth 2.0 credentials from Google Cloud Console")
+                print("and save as client_secrets.json in the project root.")
+                sys.exit(1)
+            flow = InstalledAppFlow.from_client_secrets_file(str(client_secrets), YOUTUBE_SCOPES)
+            creds = flow.run_local_server(port=0)
+
+        with open(token_path, "w") as f:
+            f.write(creds.to_json())
+
+    return build("youtube", "v3", credentials=creds)
+
+
+def upload_single_video(youtube, item: dict) -> bool:
+    """Upload a single video to YouTube as unlisted."""
+    from googleapiclient.http import MediaFileUpload
+
+    title = item["title"]
+    video_path = item.get("clip_path")
+    thumbnail_path = item.get("thumbnail_path")
+
+    if not video_path or not Path(video_path).exists():
+        print(f"  Skipping '{title}': video file not found at {video_path}")
+        return False
+
+    print(f"  Uploading: {title}...")
+
+    # Extract original video ID from clip_path: .../output/<video_id>/clips/...
+    clip_parts = Path(video_path).parts
+    try:
+        clips_idx = clip_parts.index("clips")
+        source_video_id = clip_parts[clips_idx - 1]
+    except (ValueError, IndexError):
+        source_video_id = None
+    original_url = f"https://youtube.com/watch?v={source_video_id}" if source_video_id else ""
+
+    description = (
+        f"Support me on Ko-fi: https://ko-fi.com/jonathanblowclips\n"
+        f"{item.get('description', '')}\n"
+        f"\n"
+        f"Clip from Jonathan Blow\n"
+        f"Original: {original_url}\n"
+        f"Twitch: https://twitch.tv/j_blow\n"
+        f"YouTube: https://www.youtube.com/@jblow888\n"
+        f"\n"
+        f"#jonathanblow #gamedev #webdevelopment #programming #jai"
+    )
+
+    body = {
+        "snippet": {
+            "title": title,
+            "description": description,
+            "categoryId": "22",
+        },
+        "status": {
+            "privacyStatus": "unlisted",
+        },
+    }
+
+    from tqdm import tqdm
+
+    file_size = Path(video_path).stat().st_size
+    media = MediaFileUpload(video_path, mimetype="video/mp4", resumable=True, chunksize=10 * 1024 * 1024)
+
+    try:
+        request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
+        response = None
+        with tqdm(total=file_size, unit="B", unit_scale=True, desc="    Uploading") as pbar:
+            while response is None:
+                prev = pbar.n
+                status, response = request.next_chunk()
+                if status:
+                    pbar.update(int(status.progress() * file_size) - prev)
+
+        video_id = response["id"]
+        item["youtube_id"] = video_id
+        item["youtube_url"] = f"https://youtube.com/watch?v={video_id}"
+        print(f"  Done: {item['youtube_url']}")
+
+        # Set thumbnail
+        if thumbnail_path and Path(thumbnail_path).exists():
+            try:
+                youtube.thumbnails().set(
+                    videoId=video_id,
+                    media_body=MediaFileUpload(thumbnail_path, mimetype="image/jpeg"),
+                ).execute()
+                print(f"  Thumbnail set")
+            except Exception as e:
+                print(f"  Warning: Could not set thumbnail: {e}")
+
+        return True
+
+    except Exception as e:
+        print(f"  Upload failed for '{title}': {e}")
+        return False
+
+
+def upload_from_queue(queue_file: Path):
+    """Process the upload queue: assign dates and upload due videos."""
+    if not queue_file.exists():
+        print("No upload queue found. Run the pipeline first.")
+        return
+
+    with open(queue_file) as f:
+        queue = json.load(f)
+
+    pending = [q for q in queue if q["status"] == "pending"]
+    if not pending:
+        print("No pending uploads in queue.")
+        return
+
+    # Assign scheduled dates to unscheduled items (random order, one per day at 00:00 UTC)
+    unscheduled = [q for q in pending if not q.get("scheduled_date")]
+    if unscheduled:
+        random.shuffle(unscheduled)
+        existing_dates = [
+            datetime.fromisoformat(q["scheduled_date"]).date()
+            for q in queue if q.get("scheduled_date")
+        ]
+        if existing_dates:
+            next_date = max(existing_dates) + timedelta(days=1)
+        else:
+            next_date = datetime.now(timezone.utc).date() + timedelta(days=1)
+
+        for item in unscheduled:
+            item["scheduled_date"] = next_date.isoformat()
+            next_date += timedelta(days=1)
+
+        with open(queue_file, "w") as f:
+            json.dump(queue, f, indent=2)
+
+    # Upload all pending clips sequentially
+    print(f"\n{len(pending)} clip(s) to upload:")
+    for item in pending:
+        print(f"  {item.get('scheduled_date', 'unscheduled')}: {item['title']}")
+
+    # Authenticate with YouTube
+    youtube = get_youtube_service(queue_file.parent)
+
+    for item in pending:
+        success = upload_single_video(youtube, item)
+        if success:
+            item["status"] = "uploaded"
+            item["uploaded_at"] = datetime.now(timezone.utc).isoformat()
+        else:
+            item["status"] = "failed"
+
+        # Save after each upload
+        with open(queue_file, "w") as f:
+            json.dump(queue, f, indent=2)
+
+    uploaded = sum(1 for item in pending if item["status"] == "uploaded")
+    print(f"\nUploaded {uploaded}/{len(pending)} clip(s)")
 
 
 def refresh_clips(work_dir: Path, api_key: str, template_path: Path, *, force: bool = False) -> None:
@@ -620,8 +805,14 @@ def refresh_clips(work_dir: Path, api_key: str, template_path: Path, *, force: b
             # First refresh — save current prompt for future comparison
             prompt_file.write_text(current_prompt)
 
-        # Queue thumbnail regeneration if title or prompt changed, or --force
-        if title_changed or prompt_changed or force:
+        # Check if thumbnail is missing
+        thumb_missing = not (folder / "thumbnail.jpg").exists()
+        if thumb_missing:
+            print(f"  Missing thumbnail for clip {i + 1}: {clip['title']}")
+            changes = True
+
+        # Queue thumbnail regeneration if title or prompt changed, missing, or --force
+        if title_changed or prompt_changed or thumb_missing or force:
             thumbnails_to_regenerate.append((i, clip))
 
     # --- Regenerate thumbnails in parallel ---
@@ -652,11 +843,17 @@ def refresh_clips(work_dir: Path, api_key: str, template_path: Path, *, force: b
         with open(clips_json_path, "w") as f:
             json.dump(clips, f, indent=2)
 
-        # Refresh upload queue
-        queue_file = work_dir / "upload_queue.json"
+        # Refresh upload queue — remove old entries for this video and re-add
+        work_root = work_dir.parent
+        queue_file = work_root / "upload_queue.json"
+        work_dir_prefix = str(work_dir)
         if queue_file.exists():
-            queue_file.unlink()
-        save_queue(clips, work_dir)
+            with open(queue_file) as f:
+                gq = json.load(f)
+            gq = [q for q in gq if not q.get("clip_path", "").startswith(work_dir_prefix)]
+            with open(queue_file, "w") as f:
+                json.dump(gq, f, indent=2)
+        save_queue(clips, work_root)
 
         print(f"\n[Refresh] Done! Applied changes.")
     else:
@@ -667,10 +864,10 @@ def main():
     load_dotenv()
 
     parser = argparse.ArgumentParser(description="YouTube Clip Automation")
-    parser.add_argument("url", help="YouTube video URL")
+    parser.add_argument("url", nargs="?", default=None, help="YouTube video URL (not needed for 'upload')")
     parser.add_argument(
         "command", nargs="?", default=None,
-        help="Optional command: 'refresh' to detect changes in clips.json and update folders/thumbnails",
+        help="Optional command: 'refresh', 'upload'",
     )
     parser.add_argument(
         "--reset", action="store_true", help="Reset and start from scratch"
@@ -685,6 +882,19 @@ def main():
     )
     args = parser.parse_args()
 
+    work_root = Path(
+        os.environ.get("YT_CLIP_WORK_DIR") or Path(__file__).parent / "output"
+    )
+
+    # Handle upload command (no URL needed)
+    if args.url == "upload":
+        queue_file = work_root / "upload_queue.json"
+        upload_from_queue(queue_file)
+        return
+
+    if args.url is None:
+        parser.error("URL is required (use 'upload' command to upload from queue)")
+
     # Env vars (validated early so we fail fast before downloading)
     assemblyai_key = os.environ.get("ASSEMBLYAI_API_KEY", "")
     openrouter_key = os.environ.get("OPENROUTER_API_KEY", "")
@@ -693,9 +903,6 @@ def main():
     if args.command != "refresh" and not assemblyai_key:
         parser.error("ASSEMBLYAI_API_KEY environment variable not set")
 
-    work_root = Path(
-        os.environ.get("YT_CLIP_WORK_DIR") or Path(__file__).parent / "output"
-    )
     thumbnail_template = Path(
         os.environ.get("THUMBNAIL_TEMPLATE") or Path(__file__).parent / "thumbnail.jpg"
     )
@@ -732,7 +939,7 @@ def main():
             3: ["clips.json"],
             4: [],  # clips/ dir handled separately
             5: [],  # thumbnails inside clips/ handled separately
-            6: ["upload_queue.json"],
+            6: [],  # global queue handled separately
         }
         for s in range(force_step, 7):
             for f in step_outputs.get(s, []):
@@ -750,18 +957,16 @@ def main():
                         if folder.is_dir():
                             for thumb in folder.glob("thumbnail.*"):
                                 thumb.unlink()
+            # Step 6: remove this video's entries from the global queue
+            if s == 6:
+                global_queue_file = work_root / "upload_queue.json"
+                if global_queue_file.exists():
+                    with open(global_queue_file) as f:
+                        gq = json.load(f)
+                    gq = [q for q in gq if not q.get("clip_path", "").startswith(str(work_dir))]
+                    with open(global_queue_file, "w") as f:
+                        json.dump(gq, f, indent=2)
         print(f"Forcing re-run from step {force_step}.")
-
-    # Check if all steps already completed
-    if not force_step and (work_dir / "upload_queue.json").exists():
-        print("\nAll steps have already been completed for this URL.")
-        resp = input("Would you like to reset and start from scratch? (y/n): ")
-        if resp.strip().lower() in ("y", "yes"):
-            shutil.rmtree(work_dir)
-            print("Reset: cleared previous output.\n")
-        else:
-            print("Exiting. Use --reset to force a fresh run.")
-            return
 
     work_dir.mkdir(parents=True, exist_ok=True)
 
@@ -802,7 +1007,7 @@ def main():
         clips = generate_thumbnails(clips, work_dir, openrouter_key, thumbnail_template)
 
         # Step 6: Save queue
-        save_queue(clips, work_dir)
+        save_queue(clips, work_root)
 
         print(f"\nProcessed {len(clips)} clips")
         print(f"Output directory: {work_dir / 'clips'}")

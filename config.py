@@ -41,7 +41,6 @@ Return JSON in this exact format:
       "description": "Brief description for YouTube",
       "start_ms": 12345,
       "end_ms": 67890,
-      "tags": ["tag1", "tag2"],
       "thumbnail_prompt": "Detailed prompt for generating a thumbnail image. Do not include instructions for the image generation, just a description of the content of the image. Do not include Jonathan Blow's name in the thumbnail prompt."
     }}
   ]
