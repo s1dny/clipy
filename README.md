@@ -1,5 +1,5 @@
 # blow script
-![](./image.jpg)
+![](./blow.gif)
 
 ## Requirements
 
