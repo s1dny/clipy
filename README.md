@@ -1,4 +1,4 @@
-# Blowinator
+# blow script
 ![](./image.jpg)
 
 ## Requirements
