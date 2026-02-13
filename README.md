@@ -45,6 +45,18 @@ The first run of `upload` will open a browser for OAuth consent. The token is ca
 ./clipper <youtube-url>
 ```
 
+Channel-specific output directory:
+
+```bash
+./clipper --channel philosophy <youtube-url>
+```
+
+Tag clips from this source video with a specific upload thumbnail:
+
+```bash
+./clipper --channel philosophy --thumbnail peterson.jpg <youtube-url>
+```
+
 Or with `uv run`:
 
 ```bash
@@ -68,19 +80,32 @@ Results are cached per step, so re-running the same URL resumes from where it le
 ./clipper upload
 ```
 
+For a specific channel directory:
+
+```bash
+./clipper --channel philosophy upload
+```
+
 Or with `uv run`:
 
 ```bash
 uv run main.py upload
 ```
 
-Uploads all pending clips from the global queue (`output/upload_queue.json`) to YouTube as private, scheduled to publish one per day. Dates are assigned in random order on first run.
+Uploads all pending clips from the global queue (`output/upload_queue.json`) to YouTube as private, scheduled to publish one per day. Dates are assigned in random order on first run. Each queue item must have `upload_thumbnail` metadata.
+
+Mixed-host workflow (same channel/output directory):
+
+1. Run each source video with its own `--thumbnail` (for example `peterson.jpg`, `harris.jpg`).
+2. Upload with `./clipper --channel philosophy upload`.
 
 ### Options
 
 | Flag | Description |
 |---|---|
 | `--step N` | Force re-run from step N (1-6), e.g. `--step 5` to regenerate all thumbnails |
+| `--channel NAME` | Use `./NAME` (relative to current directory) as the work/output directory |
+| `--thumbnail FILE` | For URL runs: saves per-clip upload thumbnail in queue (`upload_thumbnail` metadata), resolved from `./thumbnails/FILE` or `./thumbnail/FILE` |
 
 ## Project structure
 

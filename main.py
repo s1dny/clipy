@@ -598,7 +598,7 @@ def generate_thumbnails(
     return clips
 
 
-def save_queue(clips: list[dict], work_root: Path):
+def save_queue(clips: list[dict], work_root: Path, upload_thumbnail: str | None = None):
     """Save clips to the global upload queue in the output directory."""
     logger.info("[6/6] Saving to upload queue...")
 
@@ -609,19 +609,30 @@ def save_queue(clips: list[dict], work_root: Path):
         with open(queue_file) as f:
             queue = json.load(f)
 
-    existing_paths = {q["clip_path"] for q in queue}
+    queue_by_clip_path = {q.get("clip_path"): q for q in queue if q.get("clip_path")}
     for clip in clips:
-        if clip.get("clip_path") and clip["clip_path"] not in existing_paths:
-            queue.append(
-                {
-                    "title": clip["title"],
-                    "description": clip["description"],
-                    "clip_path": clip["clip_path"],
-                    "thumbnail_path": clip.get("thumbnail_path"),
-                    "status": "pending",
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                }
-            )
+        clip_path = clip.get("clip_path")
+        if not clip_path:
+            continue
+
+        existing = queue_by_clip_path.get(clip_path)
+        if existing:
+            if upload_thumbnail:
+                existing["upload_thumbnail"] = upload_thumbnail
+            continue
+
+        item = {
+            "title": clip["title"],
+            "description": clip["description"],
+            "clip_path": clip_path,
+            "thumbnail_path": clip.get("thumbnail_path"),
+            "status": "pending",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if upload_thumbnail:
+            item["upload_thumbnail"] = upload_thumbnail
+        queue.append(item)
+        queue_by_clip_path[clip_path] = item
 
     with open(queue_file, "w") as f:
         json.dump(queue, f, indent=2)
@@ -672,13 +683,12 @@ def get_youtube_service(work_root: Path):
     return build("youtube", "v3", credentials=creds)
 
 
-def upload_single_video(youtube, item: dict) -> bool:
+def upload_single_video(youtube, item: dict, upload_thumbnail_path: Path) -> bool:
     """Upload a single video to YouTube as unlisted."""
     from googleapiclient.http import MediaFileUpload
 
     title = item["title"]
     video_path = item.get("clip_path")
-    thumbnail_path = item.get("thumbnail_path")
 
     if not video_path or not Path(video_path).exists():
         logger.warning(f"Skipping '{title}': video file not found at {video_path}")
@@ -759,15 +769,14 @@ def upload_single_video(youtube, item: dict) -> bool:
         logger.info(f"Done: {item['youtube_url']}")
 
         # Set thumbnail
-        if thumbnail_path and Path(thumbnail_path).exists():
-            try:
-                youtube.thumbnails().set(
-                    videoId=video_id,
-                    media_body=MediaFileUpload(thumbnail_path, mimetype="image/jpeg"),
-                ).execute()
-                logger.info("Thumbnail set")
-            except Exception as e:
-                logger.warning(f"Could not set thumbnail: {e}")
+        try:
+            youtube.thumbnails().set(
+                videoId=video_id,
+                media_body=MediaFileUpload(str(upload_thumbnail_path), mimetype="image/jpeg"),
+            ).execute()
+            logger.info("Thumbnail set")
+        except Exception as e:
+            logger.warning(f"Could not set thumbnail: {e}")
 
         return True
 
@@ -788,6 +797,19 @@ def upload_from_queue(queue_file: Path):
     pending = [q for q in queue if q["status"] == "pending"]
     if not pending:
         logger.info("No pending uploads in queue.")
+        return
+
+    missing_metadata = [item for item in pending if not item.get("upload_thumbnail")]
+    if missing_metadata:
+        logger.error(
+            "Cannot upload: some pending items are missing 'upload_thumbnail' metadata."
+        )
+        logger.error(
+            "Re-run each source video with --thumbnail and --step 6, "
+            "or manually edit upload_queue.json to add upload_thumbnail."
+        )
+        for item in missing_metadata[:10]:
+            logger.error(f"  Missing metadata: {item['title']}")
         return
 
     # Assign scheduled dates to unscheduled items (random order, one per day at 00:00 UTC)
@@ -816,11 +838,31 @@ def upload_from_queue(queue_file: Path):
     for item in pending:
         logger.info(f"  {item.get('scheduled_date', 'unscheduled')}: {item['title']}")
 
+    missing_thumbnail_files = []
+    resolved_thumbnails: dict[str, Path] = {}
+    for item in pending:
+        item_thumbnail = item["upload_thumbnail"]
+        if item_thumbnail in resolved_thumbnails:
+            continue
+        try:
+            resolved_thumbnails[item_thumbnail] = resolve_upload_thumbnail_path(
+                item_thumbnail
+            )
+        except FileNotFoundError as e:
+            missing_thumbnail_files.append((item_thumbnail, str(e)))
+
+    if missing_thumbnail_files:
+        logger.error("Cannot upload: referenced upload thumbnail files are missing.")
+        for item_thumbnail, err in missing_thumbnail_files:
+            logger.error(f"  {item_thumbnail}: {err}")
+        return
+
     # Authenticate with YouTube
     youtube = get_youtube_service(queue_file.parent)
 
     for item in pending:
-        success = upload_single_video(youtube, item)
+        thumbnail_path = resolved_thumbnails[item["upload_thumbnail"]]
+        success = upload_single_video(youtube, item, thumbnail_path)
         if success:
             item["status"] = "uploaded"
             item["uploaded_at"] = datetime.now(timezone.utc).isoformat()
@@ -833,6 +875,18 @@ def upload_from_queue(queue_file: Path):
 
     uploaded = sum(1 for item in pending if item["status"] == "uploaded")
     logger.info(f"Uploaded {uploaded}/{len(pending)} clip(s)")
+
+
+def resolve_upload_thumbnail_path(filename: str) -> Path:
+    """Resolve upload thumbnail filename from local thumbnail directories."""
+    thumbnail_dirs = [Path.cwd() / "thumbnails", Path.cwd() / "thumbnail"]
+    for directory in thumbnail_dirs:
+        candidate = directory / filename
+        if candidate.exists():
+            return candidate
+
+    searched = ", ".join(str(directory / filename) for directory in thumbnail_dirs)
+    raise FileNotFoundError(f"Thumbnail not found. Looked for: {searched}")
 
 
 def main():
@@ -853,6 +907,10 @@ def main():
         metavar="N",
         help="Force restart from step N (1=download, 2=transcribe, 3=extract clips, 4=cut clips, 5=generate thumbnails, 6=save queue)",
     )
+    parser.add_argument(
+        "--thumbnail",
+        help="Thumbnail filename for URL runs; saved per clip in queue as upload_thumbnail.",
+    )
     args = parser.parse_args()
 
     work_root = Path(
@@ -861,12 +919,28 @@ def main():
 
     # Handle upload command (no URL needed)
     if args.url == "upload":
+        if args.thumbnail:
+            parser.error(
+                "--thumbnail is not used with 'upload'. "
+                "Set it when running a URL so each queue item gets upload_thumbnail metadata."
+            )
+
         queue_file = work_root / "upload_queue.json"
         upload_from_queue(queue_file)
         return
 
     if args.url is None:
         parser.error("URL is required (use 'upload' command to upload from queue)")
+
+    queue_upload_thumbnail: str | None = None
+    if args.thumbnail:
+        if Path(args.thumbnail).name != args.thumbnail:
+            parser.error("--thumbnail must be a filename only (no directory path)")
+        try:
+            resolve_upload_thumbnail_path(args.thumbnail)
+        except FileNotFoundError as e:
+            parser.error(str(e))
+        queue_upload_thumbnail = args.thumbnail
 
     # Env vars (validated early so we fail fast before downloading)
     assemblyai_key = os.environ.get("ASSEMBLYAI_API_KEY", "")
@@ -977,7 +1051,7 @@ def main():
         clips = generate_thumbnails(clips, work_dir, openrouter_key, thumbnail_template)
 
         # Step 6: Save queue
-        save_queue(clips, work_root)
+        save_queue(clips, work_root, queue_upload_thumbnail)
 
         logger.info(f"Done — {len(clips)} clips in {work_dir / 'clips'}")
 
