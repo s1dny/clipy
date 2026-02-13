@@ -1,5 +1,4 @@
-# blow script
-![](./blow.gif)
+# Clipper
 
 ## Requirements
 
@@ -43,7 +42,7 @@ The first run of `upload` will open a browser for OAuth consent. The token is ca
 ### Full pipeline
 
 ```bash
-./blow <youtube-url>
+./clipper <youtube-url>
 ```
 
 Or with `uv run`:
@@ -66,7 +65,7 @@ Results are cached per step, so re-running the same URL resumes from where it le
 ### Upload to YouTube
 
 ```bash
-./blow upload
+./clipper upload
 ```
 
 Or with `uv run`:
@@ -86,7 +85,7 @@ Uploads all pending clips from the global queue (`output/upload_queue.json`) to 
 ## Project structure
 
 ```
-blow/
+clipper/
   main.py              # Main pipeline
   config.py            # Models, prompts, and settings
   thumbnail.jpg        # Thumbnail template

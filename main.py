@@ -34,14 +34,14 @@ def setup_logging():
         )
     )
 
-    logger = logging.getLogger("blow")
+    logger = logging.getLogger("clipper")
     # Enable debug by default, or control via env var
-    log_level = os.environ.get("BLOW_LOG_LEVEL", "DEBUG")
+    log_level = os.environ.get("CLIPPER_LOG_LEVEL", "DEBUG")
     logger.setLevel(getattr(logging, log_level.upper(), logging.DEBUG))
     logger.addHandler(handler)
 
 
-logger = logging.getLogger("blow")
+logger = logging.getLogger("clipper")
 
 import assemblyai as aai
 import requests

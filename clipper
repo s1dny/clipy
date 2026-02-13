@@ -1,0 +1,11 @@
+#!/bin/bash
+
+# Clipper - YouTube Clip Automation
+# Usage: ./clipper <youtube-url> or ./clipper upload
+
+if [ $# -eq 0 ]; then
+    echo "Usage: ./clipper <youtube-url> or ./clipper upload"
+    exit 1
+fi
+
+uv run main.py "$@"
