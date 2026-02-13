@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # Clipper - YouTube Clip Automation
-# Usage: ./clipper [--channel <name>] [--thumbnail <file.jpg>] <youtube-url>
-#    or: ./clipper [--channel <name>] upload
+# Usage: ./clipper.sh [--channel <name>] [--thumbnail <file.jpg>] <youtube-url>
+#    or: ./clipper.sh [--channel <name>] upload
 
 usage() {
-    echo "Usage: ./clipper [--channel <name>] [--thumbnail <file.jpg>] <youtube-url>"
-    echo "   or: ./clipper [--channel <name>] upload"
+    echo "Usage: ./clipper.sh [--channel <name>] [--thumbnail <file.jpg>] <youtube-url>"
+    echo "   or: ./clipper.sh [--channel <name>] upload"
 }
 
 channel=""

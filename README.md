@@ -42,19 +42,19 @@ The first run of `upload` will open a browser for OAuth consent. The token is ca
 ### Full pipeline
 
 ```bash
-./clipper <youtube-url>
+./clipper.sh.sh <youtube-url>
 ```
 
 Channel-specific output directory:
 
 ```bash
-./clipper --channel philosophy <youtube-url>
+./clipper.sh.sh --channel philosophy <youtube-url>
 ```
 
 Tag clips from this source video with a specific upload thumbnail:
 
 ```bash
-./clipper --channel philosophy --thumbnail peterson.jpg <youtube-url>
+./clipper.sh --channel philosophy --thumbnail peterson.jpg <youtube-url>
 ```
 
 Or with `uv run`:
@@ -77,13 +77,13 @@ Results are cached per step, so re-running the same URL resumes from where it le
 ### Upload to YouTube
 
 ```bash
-./clipper upload
+./clipper.sh upload
 ```
 
 For a specific channel directory:
 
 ```bash
-./clipper --channel philosophy upload
+./clipper.sh --channel philosophy upload
 ```
 
 Or with `uv run`:
@@ -97,7 +97,7 @@ Uploads all pending clips from the global queue (`output/upload_queue.json`) to 
 Mixed-host workflow (same channel/output directory):
 
 1. Run each source video with its own `--thumbnail` (for example `peterson.jpg`, `harris.jpg`).
-2. Upload with `./clipper --channel philosophy upload`.
+2. Upload with `./clipper.sh --channel philosophy upload`.
 
 ### Options
 
@@ -111,7 +111,17 @@ Mixed-host workflow (same channel/output directory):
 
 ```
 clipper/
-  main.py              # Main pipeline
+  main.py              # Thin CLI entrypoint
+  clipper/
+    cli.py             # Pipeline orchestration and argument parsing
+    common.py          # Shared helpers (API calls, command runner, caching)
+    download.py        # Video download + audio extraction
+    transcription.py   # AssemblyAI transcription + sentence segmentation
+    clips.py           # LLM clip extraction + ffmpeg clip cutting
+    thumbnails.py      # Illustration + thumbnail generation/compositing
+    queue.py           # Upload queue persistence + thumbnail path resolution
+    upload.py          # YouTube upload flow and scheduling
+    logging_config.py  # Logging setup
   config.py            # Models, prompts, and settings
   thumbnail.jpg        # Thumbnail template
   client_secrets.json  # YouTube OAuth credentials (not committed)
