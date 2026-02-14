@@ -75,52 +75,75 @@ Transcript:
 
 
 def cut_clip(
-    video_path: Path, audio_path: Path, start_ms: int, end_ms: int, output_path: Path
+    video_path: Path, _audio_path: Path, start_ms: int, end_ms: int, output_path: Path
 ) -> bool:
-    """Cut a clip from the video and merge with audio using ffmpeg."""
+    """Cut and re-encode a clip to high-quality 1080p H.264."""
     start_sec = start_ms / 1000
     duration_sec = (end_ms - start_ms) / 1000
 
-    code, out, err = run_cmd(
+    common = [
+        FFMPEG,
+        "-y",
+        "-ss",
+        str(start_sec),
+        "-t",
+        str(duration_sec),
+        "-i",
+        str(video_path),
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a:0?",
+        "-vf",
+        "scale=-2:1080:flags=lanczos",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-movflags",
+        "+faststart",
+    ]
+
+    # Fast path for Apple Silicon hardware encoding.
+    code, _out, err = run_cmd(
         [
-            FFMPEG,
-            "-y",
-            "-hwaccel",
-            "videotoolbox",
-            "-ss",
-            str(start_sec),
-            "-t",
-            str(duration_sec),
-            "-i",
-            str(video_path),
-            "-ss",
-            str(start_sec),
-            "-t",
-            str(duration_sec),
-            "-i",
-            str(audio_path),
-            "-map",
-            "0:v:0",
-            "-map",
-            "1:a:0",
+            *common,
             "-c:v",
             "h264_videotoolbox",
             "-b:v",
-            "8M",
+            "10M",
+            "-maxrate",
+            "14M",
+            "-bufsize",
+            "20M",
             "-profile:v",
             "high",
             "-allow_sw",
             "1",
             "-realtime",
             "0",
-            "-c:a",
-            "aac_at",
-            "-b:a",
-            "192k",
-            "-q:a",
-            "127",
-            "-movflags",
-            "+faststart",
+            str(output_path),
+        ]
+    )
+    if code == 0:
+        return True
+
+    logger.warning("VideoToolbox encode failed, falling back to libx264.")
+    code, _out, err = run_cmd(
+        [
+            *common,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "18",
+            "-pix_fmt",
+            "yuv420p",
+            "-profile:v",
+            "high",
+            "-level:v",
+            "4.1",
             str(output_path),
         ]
     )
