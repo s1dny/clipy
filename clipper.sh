@@ -1,14 +1,16 @@
 #!/bin/bash
 
 # Clipper - YouTube Clip Automation
-# Usage: ./clipper.sh [--channel <name>] [--thumbnail <file.jpg>] <youtube-url>
-#    or: ./clipper.sh [--channel <name>] upload
+# Usage: ./clipper.sh --channel <name> --thumbnail <file.jpg> <youtube-url>
+#    or: ./clipper.sh --channel <name> upload
 
 usage() {
-    echo "Usage: ./clipper.sh [--channel <name>] [--thumbnail <file.jpg>] <youtube-url>"
-    echo "   or: ./clipper.sh [--channel <name>] upload"
+    echo "Usage: ./clipper.sh --channel <name> --thumbnail <file.jpg> <youtube-url>"
+    echo "   or: ./clipper.sh --channel <name> upload"
 }
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+channels_root="$script_dir/channels"
 channel=""
 args=()
 
@@ -44,13 +46,17 @@ if [ ${#args[@]} -eq 0 ]; then
     exit 1
 fi
 
-if [ -n "$channel" ]; then
-    if [[ "$channel" == *"/"* || "$channel" == "." || "$channel" == ".." ]]; then
-        echo "Error: --channel must be a directory name in the current directory"
-        exit 1
-    fi
-
-    export YT_CLIP_WORK_DIR="$(pwd)/$channel"
+if [ -z "$channel" ]; then
+    echo "Error: --channel is required"
+    usage
+    exit 1
 fi
+
+if [[ "$channel" == *"/"* || "$channel" == "." || "$channel" == ".." ]]; then
+    echo "Error: --channel must be a single directory name under ./channels"
+    exit 1
+fi
+
+export YT_CLIP_WORK_DIR="$channels_root/$channel"
 
 uv run main.py "${args[@]}"

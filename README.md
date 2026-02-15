@@ -26,29 +26,30 @@ OPENROUTER_API_KEY=your_key
 3. Create OAuth 2.0 credentials (Desktop app) with the `youtube.upload` scope
 4. Download the JSON and save it as `client_secrets.json` in the project root
 
-The first run of `upload` will open a browser for OAuth consent. The token is cached at `output/.youtube_token.json` for subsequent runs.
+The first run of `upload` will open a browser for OAuth consent. The token is cached at `<work-dir>/.youtube_token.json` for subsequent runs.
 
 ### Optional environment variables
 
 | Variable | Description | Default |
 |---|---|---|
 | `FFMPEG_PATH` | Path to ffmpeg binary | `/opt/homebrew/bin/ffmpeg` |
-| `YT_CLIP_WORK_DIR` | Output directory | `./output` |
-| `THUMBNAIL_TEMPLATE` | Path to thumbnail template image | `./thumbnail.jpg` |
+| `YT_CLIP_WORK_DIR` | Work directory | `./output` (used by direct `uv run main.py`) |
 | `YOUTUBE_CLIENT_SECRETS` | Path to OAuth client secrets | `./client_secrets.json` |
 
 ## Usage
 
 ### Full pipeline
 
+`clipper.sh` requires `--channel <name>` and writes to `./channels/<name>`.
+
 ```bash
-./clipper.sh.sh <youtube-url>
+./clipper.sh --channel philosophy --thumbnail peterson.jpg <youtube-url>
 ```
 
-Channel-specific output directory:
+Channel-specific work directory:
 
 ```bash
-./clipper.sh.sh --channel philosophy <youtube-url>
+./clipper.sh --channel philosophy --thumbnail peterson.jpg <youtube-url>
 ```
 
 Tag clips from this source video with a specific upload thumbnail:
@@ -60,7 +61,7 @@ Tag clips from this source video with a specific upload thumbnail:
 Or with `uv run`:
 
 ```bash
-uv run main.py <youtube-url>
+uv run main.py --thumbnail peterson.jpg <youtube-url>
 ```
 
 This runs all 6 steps:
@@ -70,7 +71,7 @@ This runs all 6 steps:
 3. Extract clip segments with LLM
 4. Cut clips with ffmpeg
 5. Generate thumbnails
-6. Save to global upload queue
+6. Save to channel upload queue
 
 Results are cached per step, so re-running the same URL resumes from where it left off. Changes to `clips.json` (titles, thumbnail prompts) and missing thumbnails are detected automatically on re-run.
 
@@ -92,9 +93,9 @@ Or with `uv run`:
 uv run main.py upload
 ```
 
-Uploads all pending clips from the global queue (`output/upload_queue.json`) to YouTube as private, scheduled to publish one per day. Dates are assigned in random order on first run. Each queue item must have `upload_thumbnail` metadata.
+Uploads all pending clips from the selected channel queue (`channels/<channel>/upload_queue.json`) to YouTube as private, scheduled to publish one per day. Dates are assigned in random order on first run. Each queue item must have `upload_thumbnail` metadata.
 
-Mixed-host workflow (same channel/output directory):
+Mixed-host workflow (same channel/work directory):
 
 1. Run each source video with its own `--thumbnail` (for example `peterson.jpg`, `harris.jpg`).
 2. Upload with `./clipper.sh --channel philosophy upload`.
@@ -104,8 +105,8 @@ Mixed-host workflow (same channel/output directory):
 | Flag | Description |
 |---|---|
 | `--step N` | Force re-run from step N (1-6), e.g. `--step 5` to regenerate all thumbnails |
-| `--channel NAME` | Use `./NAME` (relative to current directory) as the work/output directory |
-| `--thumbnail FILE` | For URL runs: saves per-clip upload thumbnail in queue (`upload_thumbnail` metadata), resolved from `./thumbnails/FILE` or `./thumbnail/FILE` |
+| `--channel NAME` | Required. Uses `./channels/NAME` as the work directory |
+| `--thumbnail FILE` | Required for URL runs. Resolved from `./thumbnails/FILE` or `./thumbnail/FILE`, used as the thumbnail template for generation, and saved per clip in queue as `upload_thumbnail` metadata. |
 
 ## Project structure
 
@@ -123,18 +124,19 @@ clipper/
     upload.py          # YouTube upload flow and scheduling
     logging_config.py  # Logging setup
   config.py            # Models, prompts, and settings
-  thumbnail.jpg        # Thumbnail template
   client_secrets.json  # YouTube OAuth credentials (not committed)
-  output/
-    upload_queue.json   # Global upload queue
-    <video-id>/
-      video.mp4
-      audio.mp3
-      transcript.json
-      sentences.json
-      clips.json
-      clips/
-        01 - Clip Title/
-          video.mp4
-          thumbnail.jpg
+  channels/
+    <channel>/
+      upload_queue.json   # Channel upload queue
+      .youtube_token.json
+      <video-id>/
+        video.mp4
+        audio.mp3
+        transcript.json
+        sentences.json
+        clips.json
+        clips/
+          01 - Clip Title/
+            video.mp4
+            thumbnail.jpg
 ```

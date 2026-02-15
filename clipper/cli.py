@@ -104,15 +104,17 @@ def main():
     if args.url is None:
         parser.error("URL is required (use 'upload' command to upload from queue)")
 
-    queue_upload_thumbnail: str | None = None
-    if args.thumbnail:
-        if Path(args.thumbnail).name != args.thumbnail:
-            parser.error("--thumbnail must be a filename only (no directory path)")
-        try:
-            resolve_upload_thumbnail_path(args.thumbnail)
-        except FileNotFoundError as e:
-            parser.error(str(e))
-        queue_upload_thumbnail = args.thumbnail
+    if not args.thumbnail:
+        parser.error(
+            "--thumbnail is required for URL runs (filename in ./thumbnails or ./thumbnail)"
+        )
+    if Path(args.thumbnail).name != args.thumbnail:
+        parser.error("--thumbnail must be a filename only (no directory path)")
+    try:
+        resolved_upload_thumbnail = resolve_upload_thumbnail_path(args.thumbnail)
+    except FileNotFoundError as e:
+        parser.error(str(e))
+    queue_upload_thumbnail: str = args.thumbnail
 
     # Env vars (validated early so we fail fast before downloading)
     assemblyai_key = os.environ.get("ASSEMBLYAI_API_KEY", "")
@@ -122,13 +124,7 @@ def main():
     if not assemblyai_key:
         parser.error("ASSEMBLYAI_API_KEY environment variable not set")
 
-    thumbnail_template = Path(
-        os.environ.get("THUMBNAIL_TEMPLATE") or project_root / "thumbnail.jpg"
-    )
-
-    if not thumbnail_template.exists():
-        logger.warning(f"Thumbnail template not found at {thumbnail_template}")
-        logger.info("Thumbnails will be generated without the template overlay.")
+    thumbnail_template = resolved_upload_thumbnail
 
     folder_name = extract_video_id(args.url)
     work_dir = work_root / folder_name

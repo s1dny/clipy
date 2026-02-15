@@ -1355,7 +1355,7 @@ wheels = [
 ]
 
 [[package]]
-name = "yt-clip-automation"
+name = "clipper"
 version = "1.0.0"
 source = { virtual = "." }
 dependencies = [
