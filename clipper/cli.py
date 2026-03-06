@@ -1,70 +1,48 @@
 import argparse
-import json
 import logging
 import os
 import shutil
 import sys
 import traceback
+from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 from .clips import cut_clips, extract_clips
-from .common import extract_video_id, load_or_compute
+from .common import load_or_compute
 from .download import download_video
 from .logging_config import setup_logging
-from .queue import load_queue, resolve_upload_thumbnail_path, save_queue
+from .paths import ClipperPaths
+from .queue import remove_work_dir_entries, save_queue
 from .thumbnails import generate_thumbnails
 from .transcription import build_sentence_transcript, transcribe_audio
 from .upload import upload_from_queue
 
 logger = logging.getLogger("clipper")
 
-
-def _force_rerun_from_step(work_dir: Path, work_root: Path, force_step: int):
-    """Delete outputs from a step onward so downstream steps are recomputed."""
-    # Map steps to the files they produce
-    step_outputs: dict[int, list[str]] = {
-        1: ["video.mp4", "audio.mp3"],
-        2: ["transcript.json", "sentences.json"],
-        3: ["clips.json"],
-        4: [],  # clips/ dir handled separately
-        5: [],  # thumbnails inside clips/ handled separately
-        6: [],  # global queue handled separately
-    }
-    for s in range(force_step, 7):
-        for f in step_outputs.get(s, []):
-            p = work_dir / f
-            if p.exists():
-                p.unlink()
-        # Steps 4-5: clear the clips directory
-        if s in (4, 5):
-            clips_dir = work_dir / "clips"
-            if s == 4 and clips_dir.exists():
-                shutil.rmtree(clips_dir)
-            elif s == 5 and clips_dir.exists():
-                # Only remove thumbnails, keep cut videos
-                for folder in clips_dir.iterdir():
-                    if folder.is_dir():
-                        for thumb in folder.glob("thumbnail.*"):
-                            thumb.unlink()
-        # Step 6: remove this video's entries from the global queue
-        if s == 6:
-            global_queue_file = work_root / "upload_queue.json"
-            if global_queue_file.exists():
-                gq = load_queue(global_queue_file)
-                gq = [
-                    q for q in gq if not q.get("clip_path", "").startswith(str(work_dir))
-                ]
-                with open(global_queue_file, "w") as f:
-                    json.dump(gq, f, indent=2)
-    logger.info(f"Forcing re-run from step {force_step}.")
+STEP_OUTPUTS: dict[int, list[str]] = {
+    1: ["video.mp4", "audio.mp3"],
+    2: ["transcript.json", "sentences.json"],
+    3: ["clips.json"],
+    4: [],
+    5: [],
+    6: [],
+}
 
 
-def main():
-    setup_logging()
-    load_dotenv()
+@dataclass(frozen=True)
+class PipelineRun:
+    url: str
+    work_dir: Path
+    upload_thumbnail: str
+    thumbnail_template: Path
+    assemblyai_key: str
+    openrouter_key: str
+    force_step: int | None
 
+
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="YouTube Clip Automation")
     parser.add_argument(
         "url",
@@ -83,23 +61,25 @@ def main():
         "--thumbnail",
         help="Thumbnail filename for URL runs; saved per clip in queue as upload_thumbnail.",
     )
-    args = parser.parse_args()
+    return parser
 
+
+def _build_paths() -> ClipperPaths:
     project_root = Path(__file__).resolve().parent.parent
     work_root = Path(os.environ.get("YT_CLIP_WORK_DIR") or project_root / "output")
+    return ClipperPaths(project_root=project_root, work_root=work_root)
 
-    # Handle upload command (no URL needed)
-    if args.url == "upload":
-        if args.thumbnail:
-            parser.error(
-                "--thumbnail is not used with 'upload'. "
-                "Set it when running a URL so each queue item gets upload_thumbnail metadata."
-            )
 
-        queue_file = work_root / "upload_queue.json"
-        upload_from_queue(queue_file, project_root)
-        return
+def _require_env(parser: argparse.ArgumentParser, key: str) -> str:
+    value = os.environ.get(key, "")
+    if not value:
+        parser.error(f"{key} environment variable not set")
+    return value
 
+
+def _build_pipeline_run(
+    args: argparse.Namespace, parser: argparse.ArgumentParser, paths: ClipperPaths
+) -> PipelineRun:
     if args.url is None:
         parser.error("URL is required (use 'upload' command to upload from queue)")
 
@@ -109,83 +89,117 @@ def main():
         )
     if Path(args.thumbnail).name != args.thumbnail:
         parser.error("--thumbnail must be a filename only (no directory path)")
-    try:
-        resolved_upload_thumbnail = resolve_upload_thumbnail_path(args.thumbnail)
-    except FileNotFoundError as e:
-        parser.error(str(e))
-    queue_upload_thumbnail: str = args.thumbnail
-
-    # Env vars (validated early so we fail fast before downloading)
-    assemblyai_key = os.environ.get("ASSEMBLYAI_API_KEY", "")
-    openrouter_key = os.environ.get("OPENROUTER_API_KEY", "")
-    if not openrouter_key:
-        parser.error("OPENROUTER_API_KEY environment variable not set")
-    if not assemblyai_key:
-        parser.error("ASSEMBLYAI_API_KEY environment variable not set")
-
-    thumbnail_template = resolved_upload_thumbnail
-
-    folder_name = extract_video_id(args.url)
-    work_dir = work_root / folder_name
-
-    logger.info(f"URL: {args.url}")
-    logger.info(f"Work dir: {work_dir}")
-
-    # Handle --step: delete outputs from that step onward so they re-run
-    force_step = args.step
-    if force_step and work_dir.exists():
-        _force_rerun_from_step(work_dir, work_root, force_step)
-
-    work_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        # Step 1: Download video and extract audio
-        video_path = work_dir / "video.mp4"
-        audio_path = work_dir / "audio.mp3"
-        if video_path.exists() and audio_path.exists():
-            logger.info("[1/6] Downloading video and extracting audio")
-            logger.info("Skipping: video and audio already exist")
-        else:
-            video_path, audio_path = download_video(args.url, work_dir)
+        thumbnail_template = paths.resolve_upload_thumbnail(args.thumbnail)
+    except FileNotFoundError as exc:
+        parser.error(str(exc))
 
-        # Step 2: Transcribe
-        transcript = load_or_compute(
-            work_dir / "transcript.json",
-            transcribe_audio,
-            audio_path,
-            assemblyai_key,
-            skip_message="\n[2/6] Transcribing audio with AssemblyAI...\n\tSkipping: transcript already exists",
-        )
+    return PipelineRun(
+        url=args.url,
+        work_dir=paths.work_dir_for_url(args.url),
+        upload_thumbnail=args.thumbnail,
+        thumbnail_template=thumbnail_template,
+        assemblyai_key=_require_env(parser, "ASSEMBLYAI_API_KEY"),
+        openrouter_key=_require_env(parser, "OPENROUTER_API_KEY"),
+        force_step=args.step,
+    )
 
-        # Build sentence-level transcript
-        sentences = load_or_compute(
-            work_dir / "sentences.json",
-            build_sentence_transcript,
-            transcript,
-        )
 
-        # Step 3: Extract clips with LLM
-        clips = load_or_compute(
-            work_dir / "clips.json",
-            extract_clips,
-            sentences,
-            openrouter_key,
-            skip_message="\n[3/6] Extracting clip segments with LLM...\n\tSkipping: clips already extracted",
-        )
+def _force_rerun_from_step(run: PipelineRun, paths: ClipperPaths) -> None:
+    """Delete outputs from a step onward so downstream steps are recomputed."""
+    for step in range(run.force_step or 0, 7):
+        for filename in STEP_OUTPUTS.get(step, []):
+            output_path = run.work_dir / filename
+            if output_path.exists():
+                output_path.unlink()
 
-        # Step 4: Cut clips
-        clips = cut_clips(video_path, audio_path, clips, work_dir)
+        clips_dir = run.work_dir / "clips"
+        if step == 4 and clips_dir.exists():
+            shutil.rmtree(clips_dir)
+        elif step == 5 and clips_dir.exists():
+            for folder in clips_dir.iterdir():
+                if folder.is_dir():
+                    for thumbnail in folder.glob("thumbnail.*"):
+                        thumbnail.unlink()
 
-        # Step 5: Generate thumbnails
-        clips = generate_thumbnails(clips, work_dir, openrouter_key, thumbnail_template)
+        if step == 6 and paths.queue_file.exists():
+            remove_work_dir_entries(paths.queue_file, run.work_dir)
 
-        # Step 6: Save queue
-        save_queue(clips, work_root, queue_upload_thumbnail)
+    logger.info(f"Forcing re-run from step {run.force_step}.")
 
-        logger.info(f"Done — {len(clips)} clips in {work_dir / 'clips'}")
 
-    except Exception as e:
-        logger.error(f"ERROR: {e}")
+def _maybe_download(run: PipelineRun) -> tuple[Path, Path]:
+    video_path = run.work_dir / "video.mp4"
+    audio_path = run.work_dir / "audio.mp3"
+    if video_path.exists() and audio_path.exists():
+        logger.info("[1/6] Downloading video and extracting audio")
+        logger.info("Skipping: video and audio already exist")
+        return video_path, audio_path
+    return download_video(run.url, run.work_dir)
+
+
+def _run_pipeline(run: PipelineRun, paths: ClipperPaths) -> None:
+    logger.info(f"URL: {run.url}")
+    logger.info(f"Work dir: {run.work_dir}")
+
+    if run.force_step and run.work_dir.exists():
+        _force_rerun_from_step(run, paths)
+
+    run.work_dir.mkdir(parents=True, exist_ok=True)
+
+    video_path, audio_path = _maybe_download(run)
+
+    transcript = load_or_compute(
+        run.work_dir / "transcript.json",
+        transcribe_audio,
+        audio_path,
+        run.assemblyai_key,
+        skip_message="\n[2/6] Transcribing audio with AssemblyAI...\n\tSkipping: transcript already exists",
+    )
+    sentences = load_or_compute(
+        run.work_dir / "sentences.json",
+        build_sentence_transcript,
+        transcript,
+    )
+    clips = load_or_compute(
+        run.work_dir / "clips.json",
+        extract_clips,
+        sentences,
+        run.openrouter_key,
+        skip_message="\n[3/6] Extracting clip segments with LLM...\n\tSkipping: clips already extracted",
+    )
+    clips = cut_clips(video_path, audio_path, clips, run.work_dir)
+    clips = generate_thumbnails(
+        clips, run.work_dir, run.openrouter_key, run.thumbnail_template
+    )
+    save_queue(clips, paths.queue_file, run.upload_thumbnail)
+
+    logger.info(f"Done - {len(clips)} clips in {run.work_dir / 'clips'}")
+
+
+def main() -> None:
+    setup_logging()
+    load_dotenv()
+
+    parser = _build_parser()
+    args = parser.parse_args()
+    paths = _build_paths()
+
+    if args.url == "upload":
+        if args.thumbnail:
+            parser.error(
+                "--thumbnail is not used with 'upload'. "
+                "Set it when running a URL so each queue item gets upload_thumbnail metadata."
+            )
+        upload_from_queue(paths.queue_file, paths.project_root)
+        return
+
+    run = _build_pipeline_run(args, parser, paths)
+    try:
+        _run_pipeline(run, paths)
+    except Exception as exc:
+        logger.error(f"ERROR: {exc}")
         traceback.print_exc()
         logger.info("Re-run with the same URL to resume from the last successful step.")
         sys.exit(1)

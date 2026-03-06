@@ -1,7 +1,9 @@
 import json
 import logging
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import requests
@@ -48,14 +50,30 @@ def run_cmd(cmd: list[str], cwd: str | None = None) -> tuple[int, str, str]:
     return result.returncode, result.stdout, result.stderr
 
 
-def load_or_compute(path: Path, compute_fn, *args, skip_message: str | None = None):
+def read_json_file(path: Path) -> Any:
+    """Load JSON from disk using UTF-8."""
+    with path.open(encoding="utf-8") as file:
+        return json.load(file)
+
+
+def write_json_file(path: Path, data: Any) -> None:
+    """Write JSON to disk using UTF-8, creating the parent directory if needed."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as file:
+        json.dump(data, file, indent=2)
+
+
+def load_or_compute(
+    path: Path,
+    compute_fn: Callable[..., Any],
+    *args: Any,
+    skip_message: str | None = None,
+) -> Any:
     """Load JSON from path if it exists, otherwise compute, save, and return."""
     if path.exists():
         if skip_message:
             logger.info(skip_message)
-        with open(path) as f:
-            return json.load(f)
+        return read_json_file(path)
     result = compute_fn(*args)
-    with open(path, "w") as f:
-        json.dump(result, f, indent=2)
+    write_json_file(path, result)
     return result

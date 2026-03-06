@@ -21,6 +21,11 @@ from .common import openrouter_request
 logger = logging.getLogger("clipper")
 
 
+def thumbnail_prompt_text(clip: dict) -> str:
+    """Normalize the prompt used both for generation and cache invalidation."""
+    return clip.get("thumbnail_prompt", clip["title"]).strip()
+
+
 def generate_illustration(prompt: str, output_path: Path, api_key: str) -> bool:
     """Generate an illustration to be composited onto thumbnail template."""
     logger.info(f"Generating illustration: {output_path.name}...")
@@ -124,7 +129,7 @@ def _generate_single_thumbnail(args: tuple) -> tuple[int, str | None]:
     illustration_path = folder / "_temp_illustration.png"
     try:
         if generate_illustration(
-            clip.get("thumbnail_prompt", clip["title"]), illustration_path, api_key
+            thumbnail_prompt_text(clip), illustration_path, api_key
         ):
             if composite_thumbnail(illustration_path, thumb_path, template_path):
                 return i, str(thumb_path)
@@ -148,15 +153,15 @@ def generate_thumbnails(
         if not folder.exists():
             continue
         prompt_file = folder / ".thumbnail_prompt"
-        current_prompt = clip.get("thumbnail_prompt", "").strip()
+        current_prompt = thumbnail_prompt_text(clip)
 
         if prompt_file.exists():
-            if prompt_file.read_text().strip() != current_prompt:
+            if prompt_file.read_text(encoding="utf-8").strip() != current_prompt:
                 logger.info(f"Prompt changed for clip {i + 1}: {clip['title']}")
                 thumb = folder / "thumbnail.jpg"
                 if thumb.exists():
                     thumb.unlink()
-        prompt_file.write_text(current_prompt)
+        prompt_file.write_text(current_prompt, encoding="utf-8")
 
     tasks = [
         (i, clip, clips_dir, api_key, template_path) for i, clip in enumerate(clips)

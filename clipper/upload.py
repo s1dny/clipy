@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 import random
@@ -6,6 +5,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from .common import write_json_file
 from .queue import load_queue, resolve_upload_thumbnail_path
 
 logger = logging.getLogger("clipper")
@@ -57,8 +57,7 @@ def get_youtube_service(work_root: Path, project_root: Path | None = None):
             )
             creds = flow.run_local_server(port=0, open_browser=False)
 
-        with open(token_path, "w") as f:
-            f.write(creds.to_json())
+        token_path.write_text(creds.to_json(), encoding="utf-8")
 
     return build("youtube", "v3", credentials=creds)
 
@@ -152,7 +151,9 @@ def upload_single_video(youtube, item: dict, upload_thumbnail_path: Path) -> boo
         try:
             youtube.thumbnails().set(
                 videoId=video_id,
-                media_body=MediaFileUpload(str(upload_thumbnail_path), mimetype="image/jpeg"),
+                media_body=MediaFileUpload(
+                    str(upload_thumbnail_path), mimetype="image/jpeg"
+                ),
             ).execute()
             logger.info("Thumbnail set")
         except Exception as e:
@@ -209,8 +210,7 @@ def upload_from_queue(queue_file: Path, project_root: Path | None = None):
             item["scheduled_date"] = next_date.isoformat()
             next_date += timedelta(days=1)
 
-        with open(queue_file, "w") as f:
-            json.dump(queue, f, indent=2)
+        write_json_file(queue_file, queue)
 
     # Upload all pending clips sequentially
     logger.info(f"{len(pending)} clip(s) to upload:")
@@ -219,13 +219,14 @@ def upload_from_queue(queue_file: Path, project_root: Path | None = None):
 
     missing_thumbnail_files = []
     resolved_thumbnails: dict[str, Path] = {}
+    thumbnail_root = project_root or Path(__file__).resolve().parent.parent
     for item in pending:
         item_thumbnail = item["upload_thumbnail"]
         if item_thumbnail in resolved_thumbnails:
             continue
         try:
             resolved_thumbnails[item_thumbnail] = resolve_upload_thumbnail_path(
-                item_thumbnail
+                item_thumbnail, project_root=thumbnail_root
             )
         except FileNotFoundError as e:
             missing_thumbnail_files.append((item_thumbnail, str(e)))
@@ -249,8 +250,7 @@ def upload_from_queue(queue_file: Path, project_root: Path | None = None):
             item["status"] = "failed"
 
         # Save after each upload
-        with open(queue_file, "w") as f:
-            json.dump(queue, f, indent=2)
+        write_json_file(queue_file, queue)
 
     uploaded = sum(1 for item in pending if item["status"] == "uploaded")
     logger.info(f"Uploaded {uploaded}/{len(pending)} clip(s)")

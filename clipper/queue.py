@@ -3,6 +3,9 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .common import write_json_file
+from .paths import ClipperPaths
+
 logger = logging.getLogger("clipper")
 
 
@@ -12,7 +15,7 @@ def load_queue(queue_file: Path) -> list[dict]:
         return []
 
     try:
-        with open(queue_file) as f:
+        with queue_file.open(encoding="utf-8") as f:
             raw = f.read().strip()
     except OSError as exc:
         logger.warning(f"Could not read queue file {queue_file}: {exc}")
@@ -37,11 +40,11 @@ def load_queue(queue_file: Path) -> list[dict]:
     return data
 
 
-def save_queue(clips: list[dict], work_root: Path, upload_thumbnail: str | None = None):
-    """Save clips to the global upload queue in the output directory."""
+def save_queue(
+    clips: list[dict], queue_file: Path, upload_thumbnail: str | None = None
+) -> None:
+    """Save clips to the upload queue."""
     logger.info("[6/6] Saving to upload queue...")
-
-    queue_file = work_root / "upload_queue.json"
 
     queue = load_queue(queue_file)
 
@@ -70,20 +73,27 @@ def save_queue(clips: list[dict], work_root: Path, upload_thumbnail: str | None 
         queue.append(item)
         queue_by_clip_path[clip_path] = item
 
-    with open(queue_file, "w") as f:
-        json.dump(queue, f, indent=2)
+    write_json_file(queue_file, queue)
 
     logger.info(f"Queue saved: {queue_file}")
     logger.info(f"Total clips in queue: {len(queue)}")
 
 
-def resolve_upload_thumbnail_path(filename: str) -> Path:
-    """Resolve upload thumbnail filename from local thumbnail directories."""
-    thumbnail_dirs = [Path.cwd() / "thumbnails", Path.cwd() / "thumbnail"]
-    for directory in thumbnail_dirs:
-        candidate = directory / filename
-        if candidate.exists():
-            return candidate
+def remove_work_dir_entries(queue_file: Path, work_dir: Path) -> None:
+    """Remove queue entries produced by a specific work directory."""
+    queue = [
+        item
+        for item in load_queue(queue_file)
+        if not item.get("clip_path", "").startswith(str(work_dir))
+    ]
+    write_json_file(queue_file, queue)
 
-    searched = ", ".join(str(directory / filename) for directory in thumbnail_dirs)
-    raise FileNotFoundError(f"Thumbnail not found. Looked for: {searched}")
+
+def resolve_upload_thumbnail_path(
+    filename: str, project_root: Path | None = None
+) -> Path:
+    """Resolve upload thumbnail filename from project-local thumbnail directories."""
+    if project_root is None:
+        project_root = Path(__file__).resolve().parent.parent
+    paths = ClipperPaths(project_root=project_root, work_root=project_root)
+    return paths.resolve_upload_thumbnail(filename)
