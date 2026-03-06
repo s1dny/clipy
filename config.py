@@ -4,7 +4,7 @@ import os
 FFMPEG = os.environ.get("FFMPEG_PATH", "/opt/homebrew/bin/ffmpeg")
 
 # AI Models
-CLIP_MODEL = "google/gemini-3-pro-preview"
+CLIP_MODEL = "google/gemini-3.1-pro-preview"
 IMAGE_MODEL = "black-forest-labs/flux.2-pro"
 ASSEMBLYAI_SPEECH_MODELS = ["universal-3-pro"]
 
@@ -24,8 +24,7 @@ ILLUSTRATION_CENTER_Y = 350  # y coordinate to center illustration on template
 
 # Prompts
 CLIP_EXTRACTION_PROMPT_TEMPLATE = """
-This is a transcript of a podcast conversation between the American video game designer and computer programmer
-Jonathan Blow and a host.
+This is a transcript of a podcast conversation between the American video game designer and computer programmer Jonathan Blow and a host.
 Analyze this ENTIRE transcript and extract as many consecutive clip segments as possible that would work well as long-form content on YouTube.
 Make sure each clip starts at an understandable point in the conversation, such as the beginning of a new topic or a natural pause.
 Do not ever cut a clip in the middle of a sentence or thought.
