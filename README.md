@@ -46,24 +46,6 @@ The first run of `upload` will open a browser for OAuth consent. The token is ca
 ./clipper.sh --channel philosophy --thumbnail peterson.jpg <youtube-url>
 ```
 
-Channel-specific work directory:
-
-```bash
-./clipper.sh --channel philosophy --thumbnail peterson.jpg <youtube-url>
-```
-
-Tag clips from this source video with a specific upload thumbnail:
-
-```bash
-./clipper.sh --channel philosophy --thumbnail peterson.jpg <youtube-url>
-```
-
-Or with `uv run`:
-
-```bash
-uv run main.py --thumbnail peterson.jpg <youtube-url>
-```
-
 This runs all 6 steps:
 
 1. Download video and extract audio
@@ -77,20 +59,10 @@ Results are cached per step, so re-running the same URL resumes from where it le
 
 ### Upload to YouTube
 
-```bash
-./clipper.sh upload
-```
-
 For a specific channel directory:
 
 ```bash
 ./clipper.sh --channel philosophy upload
-```
-
-Or with `uv run`:
-
-```bash
-uv run main.py upload
 ```
 
 Uploads all pending clips from the selected channel queue (`channels/<channel>/upload_queue.json`) to YouTube as private, scheduled to publish one per day. Dates are assigned in random order on first run. Each queue item must have `upload_thumbnail` metadata.

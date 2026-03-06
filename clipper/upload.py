@@ -6,7 +6,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .queue import resolve_upload_thumbnail_path
+from .queue import load_queue, resolve_upload_thumbnail_path
 
 logger = logging.getLogger("clipper")
 
@@ -15,6 +15,7 @@ YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 
 def get_youtube_service(work_root: Path, project_root: Path | None = None):
     """Authenticate with YouTube API and return service object."""
+    from google.auth.exceptions import RefreshError
     from google.oauth2.credentials import Credentials
     from google_auth_oauthlib.flow import InstalledAppFlow
     from googleapiclient.discovery import build
@@ -35,8 +36,17 @@ def get_youtube_service(work_root: Path, project_root: Path | None = None):
         if creds and creds.expired and creds.refresh_token:
             from google.auth.transport.requests import Request
 
-            creds.refresh(Request())
-        else:
+            try:
+                creds.refresh(Request())
+            except RefreshError as exc:
+                logger.warning(f"YouTube token refresh failed; reauthorizing: {exc}")
+                creds = None
+                try:
+                    token_path.unlink()
+                except FileNotFoundError:
+                    pass
+
+        if not creds or not creds.valid:
             if not client_secrets.exists():
                 logger.error(f"YouTube client secrets not found at {client_secrets}")
                 logger.error("Download OAuth 2.0 credentials from Google Cloud Console")
@@ -45,7 +55,7 @@ def get_youtube_service(work_root: Path, project_root: Path | None = None):
             flow = InstalledAppFlow.from_client_secrets_file(
                 str(client_secrets), YOUTUBE_SCOPES
             )
-            creds = flow.run_local_server(port=0)
+            creds = flow.run_local_server(port=0, open_browser=False)
 
         with open(token_path, "w") as f:
             f.write(creds.to_json())
@@ -161,8 +171,7 @@ def upload_from_queue(queue_file: Path, project_root: Path | None = None):
         logger.warning("No upload queue found. Run the pipeline first.")
         return
 
-    with open(queue_file) as f:
-        queue = json.load(f)
+    queue = load_queue(queue_file)
 
     pending = [q for q in queue if q["status"] == "pending"]
     if not pending:

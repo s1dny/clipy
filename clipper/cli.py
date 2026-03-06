@@ -13,7 +13,7 @@ from .clips import cut_clips, extract_clips
 from .common import extract_video_id, load_or_compute
 from .download import download_video
 from .logging_config import setup_logging
-from .queue import resolve_upload_thumbnail_path, save_queue
+from .queue import load_queue, resolve_upload_thumbnail_path, save_queue
 from .thumbnails import generate_thumbnails
 from .transcription import build_sentence_transcript, transcribe_audio
 from .upload import upload_from_queue
@@ -52,8 +52,7 @@ def _force_rerun_from_step(work_dir: Path, work_root: Path, force_step: int):
         if s == 6:
             global_queue_file = work_root / "upload_queue.json"
             if global_queue_file.exists():
-                with open(global_queue_file) as f:
-                    gq = json.load(f)
+                gq = load_queue(global_queue_file)
                 gq = [
                     q for q in gq if not q.get("clip_path", "").startswith(str(work_dir))
                 ]

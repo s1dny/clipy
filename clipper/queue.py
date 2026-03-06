@@ -6,16 +6,44 @@ from pathlib import Path
 logger = logging.getLogger("clipper")
 
 
+def load_queue(queue_file: Path) -> list[dict]:
+    """Load the upload queue, tolerating empty or invalid JSON files."""
+    if not queue_file.exists():
+        return []
+
+    try:
+        with open(queue_file) as f:
+            raw = f.read().strip()
+    except OSError as exc:
+        logger.warning(f"Could not read queue file {queue_file}: {exc}")
+        return []
+
+    if not raw:
+        logger.warning(f"Queue file is empty; treating as a new queue: {queue_file}")
+        return []
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        logger.warning(f"Queue file is invalid JSON; resetting queue {queue_file}: {exc}")
+        return []
+
+    if not isinstance(data, list):
+        logger.warning(
+            f"Queue file must contain a JSON array; resetting queue {queue_file}"
+        )
+        return []
+
+    return data
+
+
 def save_queue(clips: list[dict], work_root: Path, upload_thumbnail: str | None = None):
     """Save clips to the global upload queue in the output directory."""
     logger.info("[6/6] Saving to upload queue...")
 
     queue_file = work_root / "upload_queue.json"
 
-    queue = []
-    if queue_file.exists():
-        with open(queue_file) as f:
-            queue = json.load(f)
+    queue = load_queue(queue_file)
 
     queue_by_clip_path = {q.get("clip_path"): q for q in queue if q.get("clip_path")}
     for clip in clips:
