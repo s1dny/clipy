@@ -35,7 +35,6 @@ STEP_OUTPUTS: dict[int, list[str]] = {
 class PipelineRun:
     url: str
     work_dir: Path
-    upload_thumbnail: str
     thumbnail_template: Path
     assemblyai_key: str
     openrouter_key: str
@@ -59,7 +58,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--thumbnail",
-        help="Thumbnail filename for URL runs; saved per clip in queue as upload_thumbnail.",
+        help="Thumbnail filename for URL runs; used as the template for generated clip thumbnails.",
     )
     return parser
 
@@ -98,7 +97,6 @@ def _build_pipeline_run(
     return PipelineRun(
         url=args.url,
         work_dir=paths.work_dir_for_url(args.url),
-        upload_thumbnail=args.thumbnail,
         thumbnail_template=thumbnail_template,
         assemblyai_key=_require_env(parser, "ASSEMBLYAI_API_KEY"),
         openrouter_key=_require_env(parser, "OPENROUTER_API_KEY"),
@@ -173,7 +171,7 @@ def _run_pipeline(run: PipelineRun, paths: ClipperPaths) -> None:
     clips = generate_thumbnails(
         clips, run.work_dir, run.openrouter_key, run.thumbnail_template
     )
-    save_queue(clips, paths.queue_file, run.upload_thumbnail)
+    save_queue(clips, paths.queue_file)
 
     logger.info(f"Done - {len(clips)} clips in {run.work_dir / 'clips'}")
 
@@ -188,10 +186,7 @@ def main() -> None:
 
     if args.url == "upload":
         if args.thumbnail:
-            parser.error(
-                "--thumbnail is not used with 'upload'. "
-                "Set it when running a URL so each queue item gets upload_thumbnail metadata."
-            )
+            parser.error("--thumbnail is not used with 'upload'.")
         upload_from_queue(paths.queue_file, paths.project_root)
         return
 

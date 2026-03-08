@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .common import write_json_file
-from .paths import ClipperPaths
 
 logger = logging.getLogger("clipper")
 
@@ -37,12 +36,14 @@ def load_queue(queue_file: Path) -> list[dict]:
         )
         return []
 
+    for item in data:
+        if isinstance(item, dict):
+            item.pop("upload_thumbnail", None)
+
     return data
 
 
-def save_queue(
-    clips: list[dict], queue_file: Path, upload_thumbnail: str | None = None
-) -> None:
+def save_queue(clips: list[dict], queue_file: Path) -> None:
     """Save clips to the upload queue."""
     logger.info("[6/6] Saving to upload queue...")
 
@@ -56,8 +57,9 @@ def save_queue(
 
         existing = queue_by_clip_path.get(clip_path)
         if existing:
-            if upload_thumbnail:
-                existing["upload_thumbnail"] = upload_thumbnail
+            if clip.get("thumbnail_path"):
+                existing["thumbnail_path"] = clip["thumbnail_path"]
+            existing.pop("upload_thumbnail", None)
             continue
 
         item = {
@@ -68,8 +70,6 @@ def save_queue(
             "status": "pending",
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
-        if upload_thumbnail:
-            item["upload_thumbnail"] = upload_thumbnail
         queue.append(item)
         queue_by_clip_path[clip_path] = item
 
@@ -87,13 +87,3 @@ def remove_work_dir_entries(queue_file: Path, work_dir: Path) -> None:
         if not item.get("clip_path", "").startswith(str(work_dir))
     ]
     write_json_file(queue_file, queue)
-
-
-def resolve_upload_thumbnail_path(
-    filename: str, project_root: Path | None = None
-) -> Path:
-    """Resolve upload thumbnail filename from project-local thumbnail directories."""
-    if project_root is None:
-        project_root = Path(__file__).resolve().parent.parent
-    paths = ClipperPaths(project_root=project_root, work_root=project_root)
-    return paths.resolve_upload_thumbnail(filename)

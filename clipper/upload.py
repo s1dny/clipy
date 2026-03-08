@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .common import write_json_file
-from .queue import load_queue, resolve_upload_thumbnail_path
+from .queue import load_queue
 
 logger = logging.getLogger("clipper")
 
@@ -62,7 +62,7 @@ def get_youtube_service(work_root: Path, project_root: Path | None = None):
     return build("youtube", "v3", credentials=creds)
 
 
-def upload_single_video(youtube, item: dict, upload_thumbnail_path: Path) -> bool:
+def upload_single_video(youtube, item: dict, thumbnail_path: Path) -> bool:
     """Upload a single video to YouTube as unlisted."""
     from googleapiclient.http import MediaFileUpload
 
@@ -74,6 +74,7 @@ def upload_single_video(youtube, item: dict, upload_thumbnail_path: Path) -> boo
         return False
 
     logger.info(f"Uploading: {title}...")
+    logger.info(f"Using thumbnail: {thumbnail_path}")
 
     # Extract original video ID from clip_path: .../output/<video_id>/clips/...
     clip_parts = Path(video_path).parts
@@ -152,7 +153,7 @@ def upload_single_video(youtube, item: dict, upload_thumbnail_path: Path) -> boo
             youtube.thumbnails().set(
                 videoId=video_id,
                 media_body=MediaFileUpload(
-                    str(upload_thumbnail_path), mimetype="image/jpeg"
+                    str(thumbnail_path), mimetype="image/jpeg"
                 ),
             ).execute()
             logger.info("Thumbnail set")
@@ -179,14 +180,18 @@ def upload_from_queue(queue_file: Path, project_root: Path | None = None):
         logger.info("No pending uploads in queue.")
         return
 
-    missing_metadata = [item for item in pending if not item.get("upload_thumbnail")]
+    missing_metadata = [
+        item
+        for item in pending
+        if not item.get("thumbnail_path")
+    ]
     if missing_metadata:
         logger.error(
-            "Cannot upload: some pending items are missing 'upload_thumbnail' metadata."
+            "Cannot upload: some pending items are missing 'thumbnail_path' metadata."
         )
         logger.error(
-            "Re-run each source video with --thumbnail and --step 6, "
-            "or manually edit upload_queue.json to add upload_thumbnail."
+            "Re-run each source video with --thumbnail and --step 5/6, "
+            "or manually edit upload_queue.json to add thumbnail_path."
         )
         for item in missing_metadata[:10]:
             logger.error(f"  Missing metadata: {item['title']}")
@@ -219,29 +224,37 @@ def upload_from_queue(queue_file: Path, project_root: Path | None = None):
 
     missing_thumbnail_files = []
     resolved_thumbnails: dict[str, Path] = {}
-    thumbnail_root = project_root or Path(__file__).resolve().parent.parent
     for item in pending:
-        item_thumbnail = item["upload_thumbnail"]
-        if item_thumbnail in resolved_thumbnails:
+        clip_path = item.get("clip_path")
+        thumbnail_path = item.get("thumbnail_path")
+        if not clip_path:
+            missing_thumbnail_files.append((item.get("title", "<unknown>"), "Missing clip_path"))
             continue
+
+        if clip_path in resolved_thumbnails:
+            continue
+
         try:
-            resolved_thumbnails[item_thumbnail] = resolve_upload_thumbnail_path(
-                item_thumbnail, project_root=thumbnail_root
-            )
+            if not thumbnail_path:
+                raise FileNotFoundError("Missing thumbnail_path")
+            resolved = Path(thumbnail_path)
+            if not resolved.exists():
+                raise FileNotFoundError(f"Thumbnail file not found at {resolved}")
+            resolved_thumbnails[clip_path] = resolved
         except FileNotFoundError as e:
-            missing_thumbnail_files.append((item_thumbnail, str(e)))
+            missing_thumbnail_files.append((item.get("title", "<unknown>"), str(e)))
 
     if missing_thumbnail_files:
-        logger.error("Cannot upload: referenced upload thumbnail files are missing.")
-        for item_thumbnail, err in missing_thumbnail_files:
-            logger.error(f"  {item_thumbnail}: {err}")
+        logger.error("Cannot upload: referenced thumbnail files are missing.")
+        for title, err in missing_thumbnail_files:
+            logger.error(f"  {title}: {err}")
         return
 
     # Authenticate with YouTube
     youtube = get_youtube_service(queue_file.parent, project_root)
 
     for item in pending:
-        thumbnail_path = resolved_thumbnails[item["upload_thumbnail"]]
+        thumbnail_path = resolved_thumbnails[item["clip_path"]]
         success = upload_single_video(youtube, item, thumbnail_path)
         if success:
             item["status"] = "uploaded"

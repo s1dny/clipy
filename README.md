@@ -65,7 +65,7 @@ For a specific channel directory:
 ./clipper.sh --channel philosophy upload
 ```
 
-Uploads all pending clips from the selected channel queue (`channels/<channel>/upload_queue.json`) to YouTube as private, scheduled to publish one per day. Dates are assigned in random order on first run. Each queue item must have `upload_thumbnail` metadata.
+Uploads all pending clips from the selected channel queue (`channels/<channel>/upload_queue.json`) to YouTube as private, scheduled to publish one per day. Dates are assigned in random order on first run. Each queue item must have a valid `thumbnail_path`.
 
 Mixed-host workflow (same channel/work directory):
 
@@ -78,7 +78,7 @@ Mixed-host workflow (same channel/work directory):
 |---|---|
 | `--step N` | Force re-run from step N (1-6), e.g. `--step 5` to regenerate all thumbnails |
 | `--channel NAME` | Required. Uses `./channels/NAME` as the work directory |
-| `--thumbnail FILE` | Required for URL runs. Resolved from `./thumbnails/FILE` or `./thumbnail/FILE`, used as the thumbnail template for generation, and saved per clip in queue as `upload_thumbnail` metadata. |
+| `--thumbnail FILE` | Required for URL runs. Resolved from `./thumbnails/FILE` or `./thumbnail/FILE`, and used as the template for each generated clip thumbnail. |
 
 ## Project structure
 
