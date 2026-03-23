@@ -2,7 +2,7 @@ import logging
 import os
 import random
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from .common import write_json_file
@@ -11,6 +11,7 @@ from .queue import load_queue
 logger = logging.getLogger("clipper")
 
 YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+PUBLISH_HOUR_UTC = 12
 
 
 def get_youtube_service(work_root: Path, project_root: Path | None = None):
@@ -99,10 +100,10 @@ def upload_single_video(youtube, item: dict, thumbnail_path: Path) -> bool:
         f"#jonathanblow #gamedev #webdevelopment #programming #jai"
     )
 
-    # Schedule for the assigned date at 00:00 UTC if available
+    # Schedule for the assigned date at 12:00 UTC if available
     scheduled_date = item.get("scheduled_date")
     if scheduled_date:
-        publish_at = f"{scheduled_date}T12:00:00Z"
+        publish_at = f"{scheduled_date}T{PUBLISH_HOUR_UTC:02d}:00:00Z"
         status_body = {
             "privacyStatus": "private",
             "publishAt": publish_at,
@@ -167,6 +168,31 @@ def upload_single_video(youtube, item: dict, thumbnail_path: Path) -> bool:
         return False
 
 
+def _parse_scheduled_date(scheduled_date: str | None) -> date | None:
+    if not scheduled_date:
+        return None
+
+    try:
+        return datetime.fromisoformat(scheduled_date).date()
+    except ValueError:
+        return None
+
+
+def _publish_at_for_date(scheduled_day: date) -> datetime:
+    return datetime.combine(
+        scheduled_day,
+        datetime.min.time(),
+        tzinfo=timezone.utc,
+    ) + timedelta(hours=PUBLISH_HOUR_UTC)
+
+
+def _next_schedulable_date(now: datetime) -> date:
+    today = now.date()
+    if _publish_at_for_date(today) > now:
+        return today
+    return today + timedelta(days=1)
+
+
 def upload_from_queue(queue_file: Path, project_root: Path | None = None):
     """Process the upload queue: assign dates and upload due videos."""
     if not queue_file.exists():
@@ -197,24 +223,59 @@ def upload_from_queue(queue_file: Path, project_root: Path | None = None):
             logger.error(f"  Missing metadata: {item['title']}")
         return
 
-    # Assign scheduled dates to unscheduled items (random order, one per day at 00:00 UTC)
-    unscheduled = [q for q in pending if not q.get("scheduled_date")]
-    if unscheduled:
-        random.shuffle(unscheduled)
-        existing_dates = [
-            datetime.fromisoformat(q["scheduled_date"]).date()
-            for q in queue
-            if q.get("scheduled_date")
-        ]
-        if existing_dates:
-            next_date = max(existing_dates) + timedelta(days=1)
-        else:
-            next_date = datetime.now(timezone.utc).date() + timedelta(days=1)
+    # Assign scheduled dates to pending items starting from the earliest future slot.
+    now = datetime.now(timezone.utc)
+    minimum_date = _next_schedulable_date(now)
+    reserved_dates = set()
+    pending_to_assign = []
+    pending_ids = {id(item) for item in pending}
 
-        for item in unscheduled:
-            item["scheduled_date"] = next_date.isoformat()
+    for item in pending:
+        scheduled_day = _parse_scheduled_date(item.get("scheduled_date"))
+        if scheduled_day is None:
+            pending_to_assign.append(item)
+            continue
+
+        if _publish_at_for_date(scheduled_day) <= now:
+            logger.info(
+                "Rescheduling past-due upload '%s' from %s",
+                item["title"],
+                item["scheduled_date"],
+            )
+            pending_to_assign.append(item)
+            continue
+
+        reserved_dates.add(scheduled_day)
+
+    for item in queue:
+        if id(item) in pending_ids:
+            continue
+        scheduled_day = _parse_scheduled_date(item.get("scheduled_date"))
+        if scheduled_day is None:
+            continue
+        if _publish_at_for_date(scheduled_day) > now:
+            reserved_dates.add(scheduled_day)
+
+    unscheduled = [item for item in pending_to_assign if not item.get("scheduled_date")]
+    random.shuffle(unscheduled)
+    to_reassign = [
+        item for item in pending_to_assign if item.get("scheduled_date")
+    ] + unscheduled
+
+    next_date = minimum_date
+    updated_schedule = False
+    for item in to_reassign:
+        while next_date in reserved_dates:
             next_date += timedelta(days=1)
 
+        if item.get("scheduled_date") != next_date.isoformat():
+            item["scheduled_date"] = next_date.isoformat()
+            updated_schedule = True
+
+        reserved_dates.add(next_date)
+        next_date += timedelta(days=1)
+
+    if updated_schedule:
         write_json_file(queue_file, queue)
 
     # Upload all pending clips sequentially
