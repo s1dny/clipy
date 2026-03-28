@@ -1,19 +1,19 @@
 import base64
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
 
-from config import (
-    ILLUSTRATION_CENTER_X,
-    ILLUSTRATION_CENTER_Y,
-    ILLUSTRATION_PROMPT_TEMPLATE,
-    ILLUSTRATION_SIZE,
-    IMAGE_GENERATION_TIMEOUT,
-    IMAGE_MODEL,
-)
+IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "black-forest-labs/flux.2-pro")
+IMAGE_GENERATION_TIMEOUT = int(os.environ.get("IMAGE_GENERATION_TIMEOUT", "120"))
+ILLUSTRATION_PROMPT_TEMPLATE = os.environ.get("ILLUSTRATION_PROMPT_TEMPLATE", "")
+_illustration_size = os.environ.get("ILLUSTRATION_SIZE", "700,700")
+ILLUSTRATION_SIZE = tuple(int(x) for x in _illustration_size.split(","))
+ILLUSTRATION_CENTER_X = int(os.environ.get("ILLUSTRATION_CENTER_X", "850"))
+ILLUSTRATION_CENTER_Y = int(os.environ.get("ILLUSTRATION_CENTER_Y", "350"))
 
 from .clips import clip_folder_name
 from .common import openrouter_request

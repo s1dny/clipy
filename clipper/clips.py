@@ -1,11 +1,15 @@
 import json
 import logging
+import os
 import re
 from pathlib import Path
 
-from config import CLIP_EXTRACTION_PROMPT_TEMPLATE, CLIP_EXTRACTION_TIMEOUT, CLIP_MODEL, FFMPEG
-
 from .common import openrouter_request, run_cmd
+
+FFMPEG = os.environ.get("FFMPEG_PATH", "/opt/homebrew/bin/ffmpeg")
+CLIP_MODEL = os.environ.get("CLIP_MODEL", "google/gemini-3.1-pro-preview")
+CLIP_EXTRACTION_TIMEOUT = int(os.environ.get("CLIP_EXTRACTION_TIMEOUT", "3600"))
+CLIP_EXTRACTION_PROMPT_TEMPLATE = os.environ.get("CLIP_EXTRACTION_PROMPT_TEMPLATE", "")
 
 logger = logging.getLogger("clipper")
 

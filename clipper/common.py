@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -8,7 +9,9 @@ from urllib.parse import parse_qs, urlparse
 
 import requests
 
-from config import OPENROUTER_API_URL
+OPENROUTER_API_URL = os.environ.get(
+    "OPENROUTER_API_URL", "https://openrouter.ai/api/v1/chat/completions"
+)
 
 logger = logging.getLogger("clipper")
 

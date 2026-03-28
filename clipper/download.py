@@ -1,10 +1,11 @@
 import logging
+import os
 import sys
 from pathlib import Path
 
-from config import FFMPEG
-
 from .common import run_cmd
+
+FFMPEG = os.environ.get("FFMPEG_PATH", "/opt/homebrew/bin/ffmpeg")
 
 logger = logging.getLogger("clipper")
 

@@ -1,7 +1,7 @@
 [project]
 name = "clipper"
 version = "1.0.0"
-description = "YouTube Clip Automation Script - Downloads video, transcribes, extracts clips via LLM, generates thumbnails"
+description = "Clipper: The YouTube Automator - Downloads videos, extracts clips, generates thumbnails and uploads all automatically"
 requires-python = ">=3.10"
 dependencies = [
     "requests>=2.31.0",

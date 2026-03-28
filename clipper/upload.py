@@ -11,7 +11,9 @@ from .queue import load_queue
 logger = logging.getLogger("clipper")
 
 YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
-PUBLISH_HOUR_UTC = 12
+PUBLISH_HOUR_UTC = int(os.environ.get("PUBLISH_HOUR_UTC", "12"))
+YOUTUBE_CATEGORY_ID = os.environ.get("YOUTUBE_CATEGORY_ID", "22")
+DESCRIPTION_TEMPLATE = os.environ.get("DESCRIPTION_TEMPLATE", "")
 
 
 def get_youtube_service(work_root: Path, project_root: Path | None = None):
@@ -88,16 +90,9 @@ def upload_single_video(youtube, item: dict, thumbnail_path: Path) -> bool:
         f"https://youtube.com/watch?v={source_video_id}" if source_video_id else ""
     )
 
-    description = (
-        f"Support me on Ko-fi: https://ko-fi.com/jonathanblowclips\n"
-        f"{item.get('description', '')}\n"
-        f"\n"
-        f"Clip from Jonathan Blow\n"
-        f"Original: {original_url}\n"
-        f"Twitch: https://twitch.tv/j_blow\n"
-        f"YouTube: https://www.youtube.com/@jblow888\n"
-        f"\n"
-        f"#jonathanblow #gamedev #webdevelopment #programming #jai"
+    description = DESCRIPTION_TEMPLATE.format(
+        clip_description=item.get("description", ""),
+        original_url=original_url,
     )
 
     # Schedule for the assigned date at 12:00 UTC if available
@@ -118,7 +113,7 @@ def upload_single_video(youtube, item: dict, thumbnail_path: Path) -> bool:
         "snippet": {
             "title": title,
             "description": description,
-            "categoryId": "22",
+            "categoryId": YOUTUBE_CATEGORY_ID,
         },
         "status": status_body,
     }

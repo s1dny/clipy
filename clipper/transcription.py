@@ -1,4 +1,5 @@
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -6,11 +7,13 @@ from pathlib import Path
 import assemblyai as aai
 import requests
 
-from config import (
-    ASSEMBLYAI_SPEECH_MODELS,
-    HTTP_TIMEOUT,
-    MAX_TRANSCRIPTION_WAIT_SECONDS,
+ASSEMBLYAI_SPEECH_MODELS = os.environ.get(
+    "ASSEMBLYAI_SPEECH_MODELS", "universal-3-pro"
+).split(",")
+MAX_TRANSCRIPTION_WAIT_SECONDS = int(
+    os.environ.get("MAX_TRANSCRIPTION_WAIT_SECONDS", "3600")
 )
+HTTP_TIMEOUT = int(os.environ.get("HTTP_TIMEOUT", "30"))
 
 logger = logging.getLogger("clipper")
 
