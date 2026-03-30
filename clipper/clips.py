@@ -52,7 +52,7 @@ Transcript:
 
     try:
         clips = json.loads(content)["clips"]
-    except (json.JSONDecodeError, KeyError):
+    except json.JSONDecodeError, KeyError:
         logger.warning("JSON parse error, attempting to fix...")
         # Try to extract JSON from markdown code blocks
         json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)

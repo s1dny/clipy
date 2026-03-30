@@ -27,7 +27,9 @@ def load_queue(queue_file: Path) -> list[dict]:
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
-        logger.warning(f"Queue file is invalid JSON; resetting queue {queue_file}: {exc}")
+        logger.warning(
+            f"Queue file is invalid JSON; resetting queue {queue_file}: {exc}"
+        )
         return []
 
     if not isinstance(data, list):

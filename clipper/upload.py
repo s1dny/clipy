@@ -84,7 +84,7 @@ def upload_single_video(youtube, item: dict, thumbnail_path: Path) -> bool:
     try:
         clips_idx = clip_parts.index("clips")
         source_video_id = clip_parts[clips_idx - 1]
-    except (ValueError, IndexError):
+    except ValueError, IndexError:
         source_video_id = None
     original_url = (
         f"https://youtube.com/watch?v={source_video_id}" if source_video_id else ""
@@ -148,9 +148,7 @@ def upload_single_video(youtube, item: dict, thumbnail_path: Path) -> bool:
         try:
             youtube.thumbnails().set(
                 videoId=video_id,
-                media_body=MediaFileUpload(
-                    str(thumbnail_path), mimetype="image/jpeg"
-                ),
+                media_body=MediaFileUpload(str(thumbnail_path), mimetype="image/jpeg"),
             ).execute()
             logger.info("Thumbnail set")
         except Exception as e:
@@ -201,11 +199,7 @@ def upload_from_queue(queue_file: Path, project_root: Path | None = None):
         logger.info("No pending uploads in queue.")
         return
 
-    missing_metadata = [
-        item
-        for item in pending
-        if not item.get("thumbnail_path")
-    ]
+    missing_metadata = [item for item in pending if not item.get("thumbnail_path")]
     if missing_metadata:
         logger.error(
             "Cannot upload: some pending items are missing 'thumbnail_path' metadata."
@@ -284,7 +278,9 @@ def upload_from_queue(queue_file: Path, project_root: Path | None = None):
         clip_path = item.get("clip_path")
         thumbnail_path = item.get("thumbnail_path")
         if not clip_path:
-            missing_thumbnail_files.append((item.get("title", "<unknown>"), "Missing clip_path"))
+            missing_thumbnail_files.append(
+                (item.get("title", "<unknown>"), "Missing clip_path")
+            )
             continue
 
         if clip_path in resolved_thumbnails:
