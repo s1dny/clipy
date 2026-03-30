@@ -12,7 +12,6 @@ from .common import openrouter_request
 
 IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "black-forest-labs/flux.2-pro")
 IMAGE_GENERATION_TIMEOUT = int(os.environ.get("IMAGE_GENERATION_TIMEOUT", "120"))
-ILLUSTRATION_PROMPT_TEMPLATE = os.environ.get("ILLUSTRATION_PROMPT_TEMPLATE", "")
 _illustration_size = os.environ.get("ILLUSTRATION_SIZE", "700,700")
 ILLUSTRATION_SIZE = tuple(int(x) for x in _illustration_size.split(","))
 ILLUSTRATION_CENTER_X = int(os.environ.get("ILLUSTRATION_CENTER_X", "850"))
@@ -26,12 +25,14 @@ def thumbnail_prompt_text(clip: dict) -> str:
     return clip.get("thumbnail_prompt", clip["title"]).strip()
 
 
-def generate_illustration(prompt: str, output_path: Path, api_key: str) -> bool:
+def generate_illustration(
+    prompt: str, output_path: Path, api_key: str, prompt_template: str
+) -> bool:
     """Generate an illustration to be composited onto thumbnail template."""
     logger.info(f"Generating illustration: {output_path.name}...")
 
     try:
-        illustration_prompt = ILLUSTRATION_PROMPT_TEMPLATE.format(prompt=prompt)
+        illustration_prompt = prompt_template.format(prompt=prompt)
         data = openrouter_request(
             api_key,
             {
@@ -117,7 +118,7 @@ def composite_thumbnail(
 
 def _generate_single_thumbnail(args: tuple) -> tuple[int, str | None]:
     """Generate a single thumbnail (for use with ThreadPoolExecutor)."""
-    i, clip, clips_dir, api_key, template_path = args
+    i, clip, clips_dir, api_key, template_path, prompt_template = args
     folder = clips_dir / clip_folder_name(i, clip["title"])
     folder.mkdir(exist_ok=True)
     thumb_path = folder / "thumbnail.jpg"
@@ -129,7 +130,10 @@ def _generate_single_thumbnail(args: tuple) -> tuple[int, str | None]:
     illustration_path = folder / "_temp_illustration.png"
     try:
         if generate_illustration(
-            thumbnail_prompt_text(clip), illustration_path, api_key
+            thumbnail_prompt_text(clip),
+            illustration_path,
+            api_key,
+            prompt_template,
         ):
             if composite_thumbnail(illustration_path, thumb_path, template_path):
                 return i, str(thumb_path)
@@ -140,7 +144,11 @@ def _generate_single_thumbnail(args: tuple) -> tuple[int, str | None]:
 
 
 def generate_thumbnails(
-    clips: list[dict], work_dir: Path, api_key: str, template_path: Path
+    clips: list[dict],
+    work_dir: Path,
+    api_key: str,
+    template_path: Path,
+    prompt_template: str,
 ) -> list[dict]:
     """Generate thumbnails for each clip in parallel. Detects prompt changes and missing thumbnails."""
     logger.info("[5/6] Generating thumbnails...")
@@ -164,7 +172,8 @@ def generate_thumbnails(
         prompt_file.write_text(current_prompt, encoding="utf-8")
 
     tasks = [
-        (i, clip, clips_dir, api_key, template_path) for i, clip in enumerate(clips)
+        (i, clip, clips_dir, api_key, template_path, prompt_template)
+        for i, clip in enumerate(clips)
     ]
 
     with ThreadPoolExecutor(max_workers=10) as pool:

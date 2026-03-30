@@ -20,7 +20,11 @@ To install a `clipper` command into your CLI with `uv`, run:
 uv tool install --editable .
 ```
 
-Copy the `.env.example` to `.env` and fill in the variables
+Copy the `.env.example` to `.env` and fill in the variables.
+
+Copy `config.toml.example` to `config.toml` and customize it for your channels.
+
+`config.toml` uses `[defaults]` for shared templates and `[channels.<name>]` for channel-specific overrides. Any missing template falls back to `[defaults]`.
 
 ### YouTube upload setup
 
@@ -90,6 +94,8 @@ Uploads all pending clips from the selected channel queue (`channels/<channel>/u
 clipper/
   main.py              # Thin CLI entrypoint
   pyproject.toml       # Project metadata and dependencies
+  config.toml.example  # Minimal config template to copy locally
+  config.toml          # Shared defaults + per-channel prompt templates
   uv.lock              # Locked dependency versions
   clipper/
     __init__.py        # Package marker

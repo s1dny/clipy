@@ -9,12 +9,13 @@ from .common import openrouter_request, run_cmd
 FFMPEG = os.environ.get("FFMPEG_PATH", "/opt/homebrew/bin/ffmpeg")
 CLIP_MODEL = os.environ.get("CLIP_MODEL", "google/gemini-3.1-pro-preview")
 CLIP_EXTRACTION_TIMEOUT = int(os.environ.get("CLIP_EXTRACTION_TIMEOUT", "3600"))
-CLIP_EXTRACTION_PROMPT_TEMPLATE = os.environ.get("CLIP_EXTRACTION_PROMPT_TEMPLATE", "")
 
 logger = logging.getLogger("clipper")
 
 
-def extract_clips(sentences: list[dict], api_key: str) -> list[dict]:
+def extract_clips(
+    sentences: list[dict], api_key: str, prompt_template: str
+) -> list[dict]:
     """Use LLM to extract interesting clip segments from sentence transcript."""
     logger.info("[3/6] Extracting clip segments with LLM...")
 
@@ -22,7 +23,7 @@ def extract_clips(sentences: list[dict], api_key: str) -> list[dict]:
 
     # Build prompt from config template
     prompt = (
-        CLIP_EXTRACTION_PROMPT_TEMPLATE
+        prompt_template
         + f"""
 
 Transcript:

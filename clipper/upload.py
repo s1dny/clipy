@@ -13,7 +13,6 @@ logger = logging.getLogger("clipper")
 YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 PUBLISH_HOUR_UTC = int(os.environ.get("PUBLISH_HOUR_UTC", "12"))
 YOUTUBE_CATEGORY_ID = os.environ.get("YOUTUBE_CATEGORY_ID", "22")
-DESCRIPTION_TEMPLATE = os.environ.get("DESCRIPTION_TEMPLATE", "")
 
 
 def get_youtube_service(work_root: Path, project_root: Path | None = None):
@@ -65,7 +64,9 @@ def get_youtube_service(work_root: Path, project_root: Path | None = None):
     return build("youtube", "v3", credentials=creds)
 
 
-def upload_single_video(youtube, item: dict, thumbnail_path: Path) -> bool:
+def upload_single_video(
+    youtube, item: dict, thumbnail_path: Path, description_template: str
+) -> bool:
     """Upload a single video to YouTube as unlisted."""
     from googleapiclient.http import MediaFileUpload
 
@@ -90,7 +91,7 @@ def upload_single_video(youtube, item: dict, thumbnail_path: Path) -> bool:
         f"https://youtube.com/watch?v={source_video_id}" if source_video_id else ""
     )
 
-    description = DESCRIPTION_TEMPLATE.format(
+    description = description_template.format(
         clip_description=item.get("description", ""),
         original_url=original_url,
     )
@@ -186,7 +187,9 @@ def _next_schedulable_date(now: datetime) -> date:
     return today + timedelta(days=1)
 
 
-def upload_from_queue(queue_file: Path, project_root: Path | None = None):
+def upload_from_queue(
+    queue_file: Path, description_template: str, project_root: Path | None = None
+):
     """Process the upload queue: assign dates and upload due videos."""
     if not queue_file.exists():
         logger.warning("No upload queue found. Run the pipeline first.")
@@ -307,7 +310,9 @@ def upload_from_queue(queue_file: Path, project_root: Path | None = None):
 
     for item in pending:
         thumbnail_path = resolved_thumbnails[item["clip_path"]]
-        success = upload_single_video(youtube, item, thumbnail_path)
+        success = upload_single_video(
+            youtube, item, thumbnail_path, description_template
+        )
         if success:
             item["status"] = "uploaded"
             item["uploaded_at"] = datetime.now(timezone.utc).isoformat()

@@ -1,0 +1,36 @@
+[defaults]
+description_template = """
+{clip_description}
+
+Original: {original_url}
+"""
+
+clip_extraction_prompt_template = """
+Extract good standalone clips from this transcript.
+
+Return JSON in this exact format:
+{
+  "clips": [
+    {
+      "title": "Short descriptive title for the clip",
+      "description": "Brief description for YouTube",
+      "start_ms": 12345,
+      "end_ms": 67890,
+      "thumbnail_prompt": "Detailed prompt for generating a thumbnail image."
+    }
+  ]
+}
+"""
+
+illustration_prompt_template = """
+Create a simple illustration for a YouTube thumbnail about: {prompt}.
+Use a pure WHITE background (#FFFFFF).
+"""
+
+[channels.example]
+description_template = """
+{clip_description}
+
+Clip from Example Channel
+Original: {original_url}
+"""
