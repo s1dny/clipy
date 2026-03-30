@@ -17,7 +17,7 @@ ILLUSTRATION_SIZE = tuple(int(x) for x in _illustration_size.split(","))
 ILLUSTRATION_CENTER_X = int(os.environ.get("ILLUSTRATION_CENTER_X", "850"))
 ILLUSTRATION_CENTER_Y = int(os.environ.get("ILLUSTRATION_CENTER_Y", "350"))
 
-logger = logging.getLogger("clipper")
+logger = logging.getLogger(__name__)
 
 
 def thumbnail_prompt_text(clip: dict) -> str:
@@ -29,7 +29,7 @@ def generate_illustration(
     prompt: str, output_path: Path, api_key: str, prompt_template: str
 ) -> bool:
     """Generate an illustration to be composited onto thumbnail template."""
-    logger.info(f"Generating illustration: {output_path.name}...")
+    logger.info("Generating illustration: %s...", output_path.name)
 
     try:
         illustration_prompt = prompt_template.format(prompt=prompt)
@@ -61,7 +61,7 @@ def generate_illustration(
         return False
 
     except Exception as e:
-        logger.error(f"Illustration generation failed: {e}")
+        logger.error("Illustration generation failed: %s", e)
         return False
 
 
@@ -69,10 +69,10 @@ def composite_thumbnail(
     illustration_path: Path, output_path: Path, template_path: Path
 ) -> bool:
     """Crop illustration to non-white content, scale, and center on template."""
-    logger.info(f"Compositing thumbnail: {output_path.name}...")
+    logger.info("Compositing thumbnail: %s...", output_path.name)
 
     if not template_path.exists():
-        logger.error(f"Thumbnail template not found at {template_path}")
+        logger.error("Thumbnail template not found at %s", template_path)
         return False
 
     try:
@@ -112,7 +112,7 @@ def composite_thumbnail(
         return True
 
     except Exception as e:
-        logger.error(f"Thumbnail compositing failed: {e}")
+        logger.error("Thumbnail compositing failed: %s", e)
         return False
 
 
@@ -124,7 +124,12 @@ def _generate_single_thumbnail(args: tuple) -> tuple[int, str | None]:
     thumb_path = folder / "thumbnail.jpg"
 
     if thumb_path.exists():
-        logger.info(f"Skipping clip {i + 1}: {clip['title']} (thumbnail exists)")
+        logger.info(
+            "Skipping clip %s: %s (thumbnail exists)",
+            i + 1,
+            clip["title"],
+            extra={"highlighter": None},
+        )
         return i, str(thumb_path)
 
     illustration_path = folder / "_temp_illustration.png"
@@ -165,7 +170,12 @@ def generate_thumbnails(
 
         if prompt_file.exists():
             if prompt_file.read_text(encoding="utf-8").strip() != current_prompt:
-                logger.info(f"Prompt changed for clip {i + 1}: {clip['title']}")
+                logger.info(
+                    "Prompt changed for clip %s: %s",
+                    i + 1,
+                    clip["title"],
+                    extra={"highlighter": None},
+                )
                 thumb = folder / "thumbnail.jpg"
                 if thumb.exists():
                     thumb.unlink()

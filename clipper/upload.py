@@ -5,10 +5,20 @@ import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+from rich.progress import (
+    BarColumn,
+    DownloadColumn,
+    TaskProgressColumn,
+    TextColumn,
+    TimeRemainingColumn,
+    TransferSpeedColumn,
+)
+
 from .common import write_json_file
+from .logging_config import create_progress
 from .queue import load_queue
 
-logger = logging.getLogger("clipper")
+logger = logging.getLogger(__name__)
 
 YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 PUBLISH_HOUR_UTC = int(os.environ.get("PUBLISH_HOUR_UTC", "12"))
@@ -41,7 +51,7 @@ def get_youtube_service(work_root: Path, project_root: Path | None = None):
             try:
                 creds.refresh(Request())
             except RefreshError as exc:
-                logger.warning(f"YouTube token refresh failed; reauthorizing: {exc}")
+                logger.warning("YouTube token refresh failed; reauthorizing: %s", exc)
                 creds = None
                 try:
                     token_path.unlink()
@@ -50,7 +60,7 @@ def get_youtube_service(work_root: Path, project_root: Path | None = None):
 
         if not creds or not creds.valid:
             if not client_secrets.exists():
-                logger.error(f"YouTube client secrets not found at {client_secrets}")
+                logger.error("YouTube client secrets not found at %s", client_secrets)
                 logger.error("Download OAuth 2.0 credentials from Google Cloud Console")
                 logger.error("and save as client_secrets.json in the project root.")
                 sys.exit(1)
@@ -74,11 +84,16 @@ def upload_single_video(
     video_path = item.get("clip_path")
 
     if not video_path or not Path(video_path).exists():
-        logger.warning(f"Skipping '{title}': video file not found at {video_path}")
+        logger.warning(
+            "Skipping %r: video file not found at %s",
+            title,
+            video_path,
+            extra={"highlighter": None},
+        )
         return False
 
-    logger.info(f"Uploading: {title}...")
-    logger.info(f"Using thumbnail: {thumbnail_path}")
+    logger.info("Uploading: %s...", title, extra={"highlighter": None})
+    logger.info("Using thumbnail: %s", thumbnail_path)
 
     # Extract original video ID from clip_path: .../output/<video_id>/clips/...
     clip_parts = Path(video_path).parts
@@ -104,7 +119,7 @@ def upload_single_video(
             "privacyStatus": "private",
             "publishAt": publish_at,
         }
-        logger.info(f"Scheduled to publish: {scheduled_date}")
+        logger.info("Scheduled to publish: %s", scheduled_date)
     else:
         status_body = {
             "privacyStatus": "unlisted",
@@ -119,8 +134,6 @@ def upload_single_video(
         "status": status_body,
     }
 
-    from tqdm import tqdm
-
     file_size = Path(video_path).stat().st_size
     media = MediaFileUpload(
         video_path, mimetype="video/mp4", resumable=True, chunksize=10 * 1024 * 1024
@@ -131,19 +144,29 @@ def upload_single_video(
             part="snippet,status", body=body, media_body=media
         )
         response = None
-        with tqdm(
-            total=file_size, unit="B", unit_scale=True, desc="    Uploading"
+        with create_progress(
+            TextColumn("{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            DownloadColumn(binary_units=True),
+            TransferSpeedColumn(),
+            TimeRemainingColumn(),
+            transient=True,
         ) as pbar:
+            task_id = pbar.add_task(f"Uploading {title}", total=file_size)
             while response is None:
-                prev = pbar.n
                 status, response = request.next_chunk()
                 if status:
-                    pbar.update(int(status.progress() * file_size) - prev)
+                    pbar.update(
+                        task_id,
+                        completed=min(file_size, int(status.progress() * file_size)),
+                    )
+            pbar.update(task_id, completed=file_size)
 
         video_id = response["id"]
         item["youtube_id"] = video_id
         item["youtube_url"] = f"https://youtube.com/watch?v={video_id}"
-        logger.info(f"Done: {item['youtube_url']}")
+        logger.info("Done: %s", item["youtube_url"])
 
         # Set thumbnail
         try:
@@ -153,12 +176,12 @@ def upload_single_video(
             ).execute()
             logger.info("Thumbnail set")
         except Exception as e:
-            logger.warning(f"Could not set thumbnail: {e}")
+            logger.warning("Could not set thumbnail: %s", e)
 
         return True
 
     except Exception as e:
-        logger.error(f"Upload failed for '{title}': {e}")
+        logger.error("Upload failed for %r: %s", title, e, extra={"highlighter": None})
         return False
 
 
@@ -212,7 +235,11 @@ def upload_from_queue(
             "or manually edit upload_queue.json to add thumbnail_path."
         )
         for item in missing_metadata[:10]:
-            logger.error(f"  Missing metadata: {item['title']}")
+            logger.error(
+                "  Missing metadata: %s",
+                item["title"],
+                extra={"highlighter": None},
+            )
         return
 
     # Assign scheduled dates to pending items starting from the earliest future slot.
@@ -271,9 +298,14 @@ def upload_from_queue(
         write_json_file(queue_file, queue)
 
     # Upload all pending clips sequentially
-    logger.info(f"{len(pending)} clip(s) to upload:")
+    logger.info("%s clip(s) to upload:", len(pending))
     for item in pending:
-        logger.info(f"  {item.get('scheduled_date', 'unscheduled')}: {item['title']}")
+        logger.info(
+            "  %s: %s",
+            item.get("scheduled_date", "unscheduled"),
+            item["title"],
+            extra={"highlighter": None},
+        )
 
     missing_thumbnail_files = []
     resolved_thumbnails: dict[str, Path] = {}
@@ -302,7 +334,7 @@ def upload_from_queue(
     if missing_thumbnail_files:
         logger.error("Cannot upload: referenced thumbnail files are missing.")
         for title, err in missing_thumbnail_files:
-            logger.error(f"  {title}: {err}")
+            logger.error("  %s: %s", title, err, extra={"highlighter": None})
         return
 
     # Authenticate with YouTube
@@ -323,4 +355,4 @@ def upload_from_queue(
         write_json_file(queue_file, queue)
 
     uploaded = sum(1 for item in pending if item["status"] == "uploaded")
-    logger.info(f"Uploaded {uploaded}/{len(pending)} clip(s)")
+    logger.info("Uploaded %s/%s clip(s)", uploaded, len(pending))

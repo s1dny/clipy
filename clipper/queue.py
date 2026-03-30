@@ -5,7 +5,7 @@ from pathlib import Path
 
 from .common import write_json_file
 
-logger = logging.getLogger("clipper")
+logger = logging.getLogger(__name__)
 
 
 def load_queue(queue_file: Path) -> list[dict]:
@@ -17,24 +17,24 @@ def load_queue(queue_file: Path) -> list[dict]:
         with queue_file.open(encoding="utf-8") as f:
             raw = f.read().strip()
     except OSError as exc:
-        logger.warning(f"Could not read queue file {queue_file}: {exc}")
+        logger.warning("Could not read queue file %s: %s", queue_file, exc)
         return []
 
     if not raw:
-        logger.warning(f"Queue file is empty; treating as a new queue: {queue_file}")
+        logger.warning("Queue file is empty; treating as a new queue: %s", queue_file)
         return []
 
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
         logger.warning(
-            f"Queue file is invalid JSON; resetting queue {queue_file}: {exc}"
+            "Queue file is invalid JSON; resetting queue %s: %s", queue_file, exc
         )
         return []
 
     if not isinstance(data, list):
         logger.warning(
-            f"Queue file must contain a JSON array; resetting queue {queue_file}"
+            "Queue file must contain a JSON array; resetting queue %s", queue_file
         )
         return []
 
@@ -77,8 +77,8 @@ def save_queue(clips: list[dict], queue_file: Path) -> None:
 
     write_json_file(queue_file, queue)
 
-    logger.info(f"Queue saved: {queue_file}")
-    logger.info(f"Total clips in queue: {len(queue)}")
+    logger.info("Queue saved: %s", queue_file)
+    logger.info("Total clips in queue: %s", len(queue))
 
 
 def remove_work_dir_entries(queue_file: Path, work_dir: Path) -> None:

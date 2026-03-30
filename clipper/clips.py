@@ -10,7 +10,7 @@ FFMPEG = os.environ.get("FFMPEG_PATH", "/opt/homebrew/bin/ffmpeg")
 CLIP_MODEL = os.environ.get("CLIP_MODEL", "google/gemini-3.1-pro-preview")
 CLIP_EXTRACTION_TIMEOUT = int(os.environ.get("CLIP_EXTRACTION_TIMEOUT", "3600"))
 
-logger = logging.getLogger("clipper")
+logger = logging.getLogger(__name__)
 
 
 def extract_clips(
@@ -31,7 +31,7 @@ Transcript:
 """
     )
 
-    logger.debug(f"Using model: {CLIP_MODEL}")
+    logger.debug("Using model: %s", CLIP_MODEL)
     data = openrouter_request(
         api_key,
         {
@@ -68,13 +68,19 @@ Transcript:
                 clips = json.loads(json_match.group(0))["clips"]
             else:
                 logger.error("Could not parse LLM response")
-                logger.debug(f"Raw content: {content[:500]}...")
+                logger.debug("Raw content: %s...", content[:500])
                 raise
 
-    logger.info(f"Found {len(clips)} clips:")
+    logger.info("Found %s clips:", len(clips))
     for i, clip in enumerate(clips):
         duration_min = (clip["end_ms"] - clip["start_ms"]) / 60000
-        logger.info(f"{i + 1}. {clip['title']} ({duration_min:.1f}m)")
+        logger.info(
+            "%s. %s (%.1fm)",
+            i + 1,
+            clip["title"],
+            duration_min,
+            extra={"highlighter": None},
+        )
 
     return clips
 
@@ -154,7 +160,7 @@ def cut_clip(
     )
 
     if code != 0:
-        logger.error(f"FFmpeg error: {err}")
+        logger.error("FFmpeg error: %s", err)
         return False
     return True
 
@@ -183,7 +189,7 @@ def cut_clips(
             f for f in clips_dir.iterdir() if f.is_dir() and f.name.startswith(prefix)
         ]
         if existing and existing[0].name != expected_name:
-            logger.info(f"Title changed for clip {i + 1}: renaming folder")
+            logger.info("Title changed for clip %s: renaming folder", i + 1)
             existing[0].rename(clips_dir / expected_name)
 
         folder = clips_dir / expected_name
@@ -191,10 +197,20 @@ def cut_clips(
         clip_path = folder / "video.mp4"
 
         if clip_path.exists():
-            logger.info(f"Skipping clip {i + 1}: {clip['title']} (already cut)")
+            logger.info(
+                "Skipping clip %s: %s (already cut)",
+                i + 1,
+                clip["title"],
+                extra={"highlighter": None},
+            )
             clip["clip_path"] = str(clip_path)
         else:
-            logger.info(f"Cutting clip {i + 1}: {clip['title']}...")
+            logger.info(
+                "Cutting clip %s: %s...",
+                i + 1,
+                clip["title"],
+                extra={"highlighter": None},
+            )
             if cut_clip(
                 video_path, audio_path, clip["start_ms"], clip["end_ms"], clip_path
             ):

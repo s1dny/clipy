@@ -3,7 +3,6 @@ import logging
 import os
 import shutil
 import sys
-import traceback
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,7 +19,7 @@ from .thumbnails import generate_thumbnails
 from .transcription import build_sentence_transcript, transcribe_audio
 from .upload import upload_from_queue
 
-logger = logging.getLogger("clipper")
+logger = logging.getLogger(__name__)
 
 STEP_OUTPUTS: dict[int, list[str]] = {
     1: ["video.mp4", "audio.mp3"],
@@ -145,7 +144,7 @@ def _force_rerun_from_step(run: PipelineRun, paths: ClipperPaths) -> None:
         if step == 6 and paths.queue_file.exists():
             remove_work_dir_entries(paths.queue_file, run.work_dir)
 
-    logger.info(f"Forcing re-run from step {run.force_step}.")
+    logger.info("Forcing re-run from step %s.", run.force_step)
 
 
 def _maybe_download(run: PipelineRun) -> tuple[Path, Path]:
@@ -159,8 +158,8 @@ def _maybe_download(run: PipelineRun) -> tuple[Path, Path]:
 
 
 def _run_pipeline(run: PipelineRun, paths: ClipperPaths) -> None:
-    logger.info(f"URL: {run.url}")
-    logger.info(f"Work dir: {run.work_dir}")
+    logger.info("URL: %s", run.url)
+    logger.info("Work dir: %s", run.work_dir)
 
     if run.force_step and run.work_dir.exists():
         _force_rerun_from_step(run, paths)
@@ -174,7 +173,7 @@ def _run_pipeline(run: PipelineRun, paths: ClipperPaths) -> None:
         transcribe_audio,
         audio_path,
         run.assemblyai_key,
-        skip_message="\n[2/6] Transcribing audio with AssemblyAI...\n\tSkipping: transcript already exists",
+        skip_message="[2/6] Transcribing audio with AssemblyAI... skipped: transcript already exists",
     )
     sentences = load_or_compute(
         run.work_dir / "sentences.json",
@@ -187,7 +186,7 @@ def _run_pipeline(run: PipelineRun, paths: ClipperPaths) -> None:
         sentences,
         run.openrouter_key,
         run.channel_config.clip_extraction_prompt_template,
-        skip_message="\n[3/6] Extracting clip segments with LLM...\n\tSkipping: clips already extracted",
+        skip_message="[3/6] Extracting clip segments with LLM... skipped: clips already extracted",
     )
     clips = cut_clips(video_path, audio_path, clips, run.work_dir)
     clips = generate_thumbnails(
@@ -199,7 +198,7 @@ def _run_pipeline(run: PipelineRun, paths: ClipperPaths) -> None:
     )
     save_queue(clips, paths.queue_file)
 
-    logger.info(f"Done - {len(clips)} clips in {run.work_dir / 'clips'}")
+    logger.info("Done: %s clips in %s", len(clips), run.work_dir / "clips")
 
 
 def main() -> None:
@@ -231,7 +230,6 @@ def main() -> None:
     try:
         _run_pipeline(run, paths)
     except Exception as exc:
-        logger.error(f"ERROR: {exc}")
-        traceback.print_exc()
+        logger.exception("Pipeline failed: %s", exc)
         logger.info("Re-run with the same URL to resume from the last successful step.")
         sys.exit(1)

@@ -1,11 +1,13 @@
 import logging
 import os
-import sys
 import time
 from pathlib import Path
 
 import assemblyai as aai
 import requests
+from rich.progress import SpinnerColumn, TextColumn, TimeElapsedColumn
+
+from .logging_config import create_progress
 
 ASSEMBLYAI_SPEECH_MODELS = os.environ.get(
     "ASSEMBLYAI_SPEECH_MODELS", "universal-3-pro"
@@ -15,7 +17,7 @@ MAX_TRANSCRIPTION_WAIT_SECONDS = int(
 )
 HTTP_TIMEOUT = int(os.environ.get("HTTP_TIMEOUT", "30"))
 
-logger = logging.getLogger("clipper")
+logger = logging.getLogger(__name__)
 
 
 def transcribe_audio(audio_path: Path, api_key: str) -> dict:
@@ -31,7 +33,7 @@ def transcribe_audio(audio_path: Path, api_key: str) -> dict:
         auto_chapters=False,
     )
 
-    logger.debug(f"Starting transcription with {ASSEMBLYAI_SPEECH_MODELS[0]}")
+    logger.debug("Starting transcription with %s", ASSEMBLYAI_SPEECH_MODELS[0])
 
     transcriber = aai.Transcriber(config=config)
     transcript = transcriber.submit(str(audio_path))
@@ -39,51 +41,54 @@ def transcribe_audio(audio_path: Path, api_key: str) -> dict:
     transcript_id = transcript.id
     if transcript_id is None:
         raise RuntimeError("Transcript ID is None after submission")
-    logger.debug(f"Transcript ID: {transcript_id}")
+    logger.debug("Transcript ID: %s", transcript_id)
 
     poll_url = f"https://api.assemblyai.com/v2/transcript/{transcript_id}"
     poll_headers = {"authorization": api_key}
     start_time = time.time()
 
-    while True:
-        elapsed = time.time() - start_time
-        if elapsed > MAX_TRANSCRIPTION_WAIT_SECONDS:
-            raise TimeoutError(
-                f"Transcription timed out after {MAX_TRANSCRIPTION_WAIT_SECONDS}s"
-            )
+    with create_progress(
+        SpinnerColumn(),
+        TextColumn("{task.description}"),
+        TimeElapsedColumn(),
+        transient=True,
+    ) as progress:
+        task_id = progress.add_task("Transcription status: queued", total=None)
 
-        mins, secs = divmod(int(elapsed), 60)
+        while True:
+            elapsed = time.time() - start_time
+            if elapsed > MAX_TRANSCRIPTION_WAIT_SECONDS:
+                raise TimeoutError(
+                    f"Transcription timed out after {MAX_TRANSCRIPTION_WAIT_SECONDS}s"
+                )
 
-        try:
-            resp = requests.get(poll_url, headers=poll_headers, timeout=HTTP_TIMEOUT)
-            resp.raise_for_status()
-            data = resp.json()
-        except requests.RequestException as e:
-            logger.warning(f"poll request failed ({e}), retrying...")
-            time.sleep(5)
-            continue
+            mins, secs = divmod(int(elapsed), 60)
 
-        status = data["status"]
-        # Real-time status line - use print with \r for terminal UX, only if not logging to file
-        if sys.stdout.isatty():
-            print(
-                f"\r\tStatus: {status} | Elapsed: {mins:02d}:{secs:02d}",
-                end="",
-                flush=True,
-            )
+            try:
+                resp = requests.get(
+                    poll_url, headers=poll_headers, timeout=HTTP_TIMEOUT
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            except requests.RequestException as e:
+                logger.warning("Poll request failed (%s), retrying...", e)
+                progress.update(task_id, description="Transcription status: retrying")
+                time.sleep(5)
+                continue
 
-        if status == "completed":
-            logger.info(f"Transcription complete ({mins:02d}:{secs:02d})")
-            return data
-        elif status == "error":
-            if sys.stdout.isatty():
-                print(f"\r\tTranscription failed after {mins:02d}:{secs:02d}")
-            logger.error(f"Transcription failed after {mins:02d}:{secs:02d}")
-            raise RuntimeError(
-                f"Transcription failed: {data.get('error', 'Unknown error')}"
-            )
+            status = data["status"]
+            progress.update(task_id, description=f"Transcription status: {status}")
 
-        time.sleep(3)
+            if status == "completed":
+                logger.info("Transcription complete (%02d:%02d)", mins, secs)
+                return data
+            if status == "error":
+                logger.error("Transcription failed after %02d:%02d", mins, secs)
+                raise RuntimeError(
+                    f"Transcription failed: {data.get('error', 'Unknown error')}"
+                )
+
+            time.sleep(3)
 
 
 def build_sentence_transcript(transcript: dict) -> list[dict]:

@@ -13,7 +13,7 @@ OPENROUTER_API_URL = os.environ.get(
     "OPENROUTER_API_URL", "https://openrouter.ai/api/v1/chat/completions"
 )
 
-logger = logging.getLogger("clipper")
+logger = logging.getLogger(__name__)
 
 
 def openrouter_request(api_key: str, body: dict, timeout: int) -> dict:
@@ -28,7 +28,7 @@ def openrouter_request(api_key: str, body: dict, timeout: int) -> dict:
         timeout=timeout,
     )
     if not resp.ok:
-        logger.error(f"API error {resp.status_code}: {resp.text[:500]}")
+        logger.error("API error %s: %s", resp.status_code, resp.text[:500])
         resp.raise_for_status()
     return resp.json()
 
@@ -48,7 +48,7 @@ def run_cmd(cmd: list[str], cwd: str | None = None) -> tuple[int, str, str]:
     cmd_str = " ".join(cmd)
     if len(cmd_str) > 64:
         cmd_str = cmd_str[:61] + "..."
-    logger.debug(f"Running: {cmd_str}")
+    logger.debug("Running: %s", cmd_str)
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
     return result.returncode, result.stdout, result.stderr
 

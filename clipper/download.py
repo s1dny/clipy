@@ -7,7 +7,7 @@ from .common import run_cmd
 
 FFMPEG = os.environ.get("FFMPEG_PATH", "/opt/homebrew/bin/ffmpeg")
 
-logger = logging.getLogger("clipper")
+logger = logging.getLogger(__name__)
 
 
 def download_video(youtube_url: str, work_dir: Path) -> tuple[Path, Path]:
@@ -33,7 +33,7 @@ def download_video(youtube_url: str, work_dir: Path) -> tuple[Path, Path]:
         ]
     )
     if code != 0:
-        logger.error(f"Error downloading video: {err}")
+        logger.error("Error downloading video: %s", err)
         raise Exception(f"yt-dlp video failed: {err}")
 
     # Find the actual video file (yt-dlp may modify filename)
@@ -61,9 +61,9 @@ def download_video(youtube_url: str, work_dir: Path) -> tuple[Path, Path]:
         ]
     )
     if code != 0:
-        logger.error(f"Error extracting audio: {err}")
+        logger.error("Error extracting audio: %s", err)
         raise Exception(f"ffmpeg audio extraction failed: {err}")
 
-    logger.info(f"Video: {video_path}")
-    logger.info(f"Audio: {audio_path}")
+    logger.info("Video: %s", video_path)
+    logger.info("Audio: %s", audio_path)
     return video_path, audio_path
