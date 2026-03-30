@@ -29,7 +29,7 @@ The first run of `upload` will open a browser for OAuth consent. The token is ca
 
 ### Full pipeline
 
-Use `--channel <name>` to write to `./channels/<name>`.
+`--channel <name>` is required and writes to `./channels/<name>`.
 
 ```bash
 clipper --channel philosophy --thumbnail peterson.jpg <youtube-url>
@@ -61,10 +61,8 @@ Uploads all pending clips from the selected channel queue (`channels/<channel>/u
 | Flag | Description |
 |---|---|
 | `--step N` | Force re-run from step N (1-6), e.g. `--step 5` to regenerate all thumbnails |
-| `--channel NAME` | Optional. Uses `./channels/NAME` as the work directory |
+| `--channel NAME` | Required. Uses `./channels/NAME` as the work directory |
 | `--thumbnail FILE` | Required for URL runs. Resolved from `./thumbnails/FILE` or `./thumbnail/FILE`, and used as the template for each generated clip thumbnail. |
-
-Without `--channel`, clipper uses `./output`. If `YT_CLIP_WORK_DIR` is set, that overrides both defaults.
 
 ## Project structure
 

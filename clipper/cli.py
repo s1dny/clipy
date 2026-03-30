@@ -1,6 +1,5 @@
 import argparse
 import logging
-import os
 import shutil
 import sys
 import traceback
@@ -62,6 +61,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--channel",
+        required=True,
         help="Channel directory name under ./channels to use as the work root.",
     )
     return parser
@@ -77,15 +77,9 @@ def _validate_channel(
     return channel
 
 
-def _build_paths(channel: str | None) -> ClipperPaths:
+def _build_paths(channel: str) -> ClipperPaths:
     project_root = Path(__file__).resolve().parent.parent
-    env_work_dir = os.environ.get("YT_CLIP_WORK_DIR")
-    if env_work_dir:
-        work_root = Path(env_work_dir)
-    elif channel:
-        work_root = project_root / "channels" / channel
-    else:
-        work_root = project_root / "output"
+    work_root = project_root / "channels" / channel
     return ClipperPaths(project_root=project_root, work_root=work_root)
 
 
@@ -203,6 +197,8 @@ def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
     channel = _validate_channel(parser, args.channel)
+    if channel is None:
+        parser.error("--channel is required")
     paths = _build_paths(channel)
 
     if args.url == "upload":
