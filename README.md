@@ -12,12 +12,7 @@
 uv sync
 ```
 
-Create a `.env` file with your API keys:
-
-```
-ASSEMBLYAI_API_KEY=your_key
-OPENROUTER_API_KEY=your_key
-```
+Copy the `.env.example` to `.env` and fill in the variables
 
 ### YouTube upload setup
 
@@ -27,14 +22,6 @@ OPENROUTER_API_KEY=your_key
 4. Download the JSON and save it as `client_secrets.json` in the project root
 
 The first run of `upload` will open a browser for OAuth consent. The token is cached at `<work-dir>/.youtube_token.json` for subsequent runs.
-
-### Optional environment variables
-
-| Variable | Description | Default |
-|---|---|---|
-| `FFMPEG_PATH` | Path to ffmpeg binary | `/opt/homebrew/bin/ffmpeg` |
-| `YT_CLIP_WORK_DIR` | Work directory | `./output` (used by direct `uv run main.py`) |
-| `YOUTUBE_CLIENT_SECRETS` | Path to OAuth client secrets | `./client_secrets.json` |
 
 ## Usage
 
@@ -67,11 +54,6 @@ For a specific channel directory:
 
 Uploads all pending clips from the selected channel queue (`channels/<channel>/upload_queue.json`) to YouTube as private, scheduled to publish one per day. Dates are assigned in random order on first run. Each queue item must have a valid `thumbnail_path`.
 
-Mixed-host workflow (same channel/work directory):
-
-1. Run each source video with its own `--thumbnail` (for example `peterson.jpg`, `harris.jpg`).
-2. Upload with `./clipper.sh --channel philosophy upload`.
-
 ### Options
 
 | Flag | Description |
@@ -82,25 +64,31 @@ Mixed-host workflow (same channel/work directory):
 
 ## Project structure
 
-```
+```bash
 clipper/
   main.py              # Thin CLI entrypoint
+  clipper.sh           # Convenience script for running pipeline/upload
+  pyproject.toml       # Project metadata and dependencies
+  uv.lock              # Locked dependency versions
   clipper/
+    __init__.py        # Package marker
     cli.py             # Pipeline orchestration and argument parsing
     common.py          # Shared helpers (API calls, command runner, caching)
     download.py        # Video download + audio extraction
     transcription.py   # AssemblyAI transcription + sentence segmentation
     clips.py           # LLM clip extraction + ffmpeg clip cutting
     thumbnails.py      # Illustration + thumbnail generation/compositing
+    paths.py           # Centralized path helpers for workspace artifacts
     queue.py           # Upload queue persistence + thumbnail path resolution
     upload.py          # YouTube upload flow and scheduling
     logging_config.py  # Logging setup
-  config.py            # Models, prompts, and settings
   client_secrets.json  # YouTube OAuth credentials (not committed)
+  thumbnails/
+    <template>.jpg     # Thumbnail templates passed via --thumbnail
   channels/
     <channel>/
       upload_queue.json   # Channel upload queue
-      .youtube_token.json
+      .youtube_token.json # OAuth token cache (created after first upload)
       <video-id>/
         video.mp4
         audio.mp3
