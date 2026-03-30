@@ -1,7 +1,11 @@
+import os
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+DEFAULT_ILLUSTRATION_CENTER_X = int(os.environ.get("ILLUSTRATION_CENTER_X", "850"))
+DEFAULT_ILLUSTRATION_CENTER_Y = int(os.environ.get("ILLUSTRATION_CENTER_Y", "350"))
 
 
 @dataclass(frozen=True)
@@ -9,6 +13,8 @@ class ChannelConfig:
     description_template: str
     clip_extraction_prompt_template: str
     illustration_prompt_template: str
+    illustration_center_x: int
+    illustration_center_y: int
 
 
 def _read_config_file(config_path: Path) -> dict[str, Any]:
@@ -28,6 +34,15 @@ def _get_template_value(
         )
     if not isinstance(value, str):
         raise ValueError(f"config.toml field '{key}' must be a string")
+    return value
+
+
+def _get_int_value(
+    channel_data: dict[str, Any], defaults: dict[str, Any], key: str, fallback: int
+) -> int:
+    value = channel_data.get(key, defaults.get(key, fallback))
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError(f"config.toml field '{key}' must be an integer")
     return value
 
 
@@ -61,5 +76,17 @@ def load_channel_config(project_root: Path, channel: str) -> ChannelConfig:
             channel_data,
             defaults,
             "illustration_prompt_template",
+        ),
+        illustration_center_x=_get_int_value(
+            channel_data,
+            defaults,
+            "illustration_center_x",
+            DEFAULT_ILLUSTRATION_CENTER_X,
+        ),
+        illustration_center_y=_get_int_value(
+            channel_data,
+            defaults,
+            "illustration_center_y",
+            DEFAULT_ILLUSTRATION_CENTER_Y,
         ),
     )

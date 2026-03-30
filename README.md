@@ -24,7 +24,7 @@ Copy the `.env.example` to `.env` and fill in the variables.
 
 Copy `config.toml.example` to `config.toml` and customize it for your channels.
 
-`config.toml` uses `[defaults]` for shared templates and `[channels.<name>]` for channel-specific overrides. Any missing template falls back to `[defaults]`.
+`config.toml` uses `[defaults]` for shared templates and `[channels.<name>]` for channel-specific overrides. Any missing template falls back to `[defaults]`. Thumbnail illustration placement can also be overridden per channel with `illustration_center_x` and `illustration_center_y`.
 
 ### YouTube upload setup
 
@@ -125,5 +125,6 @@ clipper/
         clips/
           01 - Clip Title/
             video.mp4
+            generated_thumbnail.png
             thumbnail.jpg
 ```

@@ -26,6 +26,8 @@ illustration_prompt_template = """
 Create a simple illustration for a YouTube thumbnail about: {prompt}.
 Use a pure WHITE background (#FFFFFF).
 """
+illustration_center_x = 850
+illustration_center_y = 350
 
 [channels.example]
 description_template = """
@@ -34,3 +36,5 @@ description_template = """
 Clip from Example Channel
 Original: {original_url}
 """
+illustration_center_x = 1275
+illustration_center_y = 525

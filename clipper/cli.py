@@ -140,6 +140,8 @@ def _force_rerun_from_step(run: PipelineRun, paths: ClipperPaths) -> None:
                 if folder.is_dir():
                     for thumbnail in folder.glob("thumbnail.*"):
                         thumbnail.unlink()
+                    for generated_thumbnail in folder.glob("generated_thumbnail.*"):
+                        generated_thumbnail.unlink()
 
         if step == 6 and paths.queue_file.exists():
             remove_work_dir_entries(paths.queue_file, run.work_dir)
@@ -194,7 +196,7 @@ def _run_pipeline(run: PipelineRun, paths: ClipperPaths) -> None:
         run.work_dir,
         run.openrouter_key,
         run.thumbnail_template,
-        run.channel_config.illustration_prompt_template,
+        run.channel_config,
     )
     save_queue(clips, paths.queue_file)
 

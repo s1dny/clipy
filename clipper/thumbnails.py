@@ -1,4 +1,5 @@
 import base64
+import io
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -9,13 +10,12 @@ from PIL import Image
 
 from .clips import clip_folder_name
 from .common import openrouter_request
+from .config import ChannelConfig
 
 IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "black-forest-labs/flux.2-pro")
 IMAGE_GENERATION_TIMEOUT = int(os.environ.get("IMAGE_GENERATION_TIMEOUT", "120"))
 _illustration_size = os.environ.get("ILLUSTRATION_SIZE", "700,700")
 ILLUSTRATION_SIZE = tuple(int(x) for x in _illustration_size.split(","))
-ILLUSTRATION_CENTER_X = int(os.environ.get("ILLUSTRATION_CENTER_X", "850"))
-ILLUSTRATION_CENTER_Y = int(os.environ.get("ILLUSTRATION_CENTER_Y", "350"))
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +53,8 @@ def generate_illustration(
                 # Extract base64 data after the comma
                 b64_data = img_data_url.split(",", 1)[1]
                 img_bytes = base64.b64decode(b64_data)
-                with open(output_path, "wb") as f:
-                    f.write(img_bytes)
+                image = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
+                image.save(output_path, "PNG")
                 return True
 
         logger.error("No image in response")
@@ -66,7 +66,11 @@ def generate_illustration(
 
 
 def composite_thumbnail(
-    illustration_path: Path, output_path: Path, template_path: Path
+    illustration_path: Path,
+    output_path: Path,
+    template_path: Path,
+    center_x: int,
+    center_y: int,
 ) -> bool:
     """Crop illustration to non-white content, scale, and center on template."""
     logger.info("Compositing thumbnail: %s...", output_path.name)
@@ -103,8 +107,8 @@ def composite_thumbnail(
         cropped.thumbnail(ILLUSTRATION_SIZE, Image.Resampling.LANCZOS)
 
         # Center on the template at the configured coordinates
-        paste_x = ILLUSTRATION_CENTER_X - cropped.width // 2
-        paste_y = ILLUSTRATION_CENTER_Y - cropped.height // 2
+        paste_x = center_x - cropped.width // 2
+        paste_y = center_y - cropped.height // 2
         template.paste(cropped, (paste_x, paste_y), cropped)
 
         # Save as JPEG
@@ -118,12 +122,22 @@ def composite_thumbnail(
 
 def _generate_single_thumbnail(args: tuple) -> tuple[int, str | None]:
     """Generate a single thumbnail (for use with ThreadPoolExecutor)."""
-    i, clip, clips_dir, api_key, template_path, prompt_template = args
+    (
+        i,
+        clip,
+        clips_dir,
+        api_key,
+        template_path,
+        prompt_template,
+        center_x,
+        center_y,
+    ) = args
     folder = clips_dir / clip_folder_name(i, clip["title"])
     folder.mkdir(exist_ok=True)
     thumb_path = folder / "thumbnail.jpg"
+    generated_thumbnail_path = folder / "generated_thumbnail.png"
 
-    if thumb_path.exists():
+    if thumb_path.exists() and generated_thumbnail_path.exists():
         logger.info(
             "Skipping clip %s: %s (thumbnail exists)",
             i + 1,
@@ -132,20 +146,28 @@ def _generate_single_thumbnail(args: tuple) -> tuple[int, str | None]:
         )
         return i, str(thumb_path)
 
-    illustration_path = folder / "_temp_illustration.png"
     try:
-        if generate_illustration(
-            thumbnail_prompt_text(clip),
-            illustration_path,
-            api_key,
-            prompt_template,
+        if not generated_thumbnail_path.exists():
+            if not generate_illustration(
+                thumbnail_prompt_text(clip),
+                generated_thumbnail_path,
+                api_key,
+                prompt_template,
+            ):
+                return i, None
+
+        if composite_thumbnail(
+            generated_thumbnail_path,
+            thumb_path,
+            template_path,
+            center_x,
+            center_y,
         ):
-            if composite_thumbnail(illustration_path, thumb_path, template_path):
-                return i, str(thumb_path)
+            return i, str(thumb_path)
         return i, None
-    finally:
-        if illustration_path.exists():
-            illustration_path.unlink()
+    except Exception as e:
+        logger.error("Thumbnail generation failed for clip %s: %s", i + 1, e)
+        return i, None
 
 
 def generate_thumbnails(
@@ -153,7 +175,7 @@ def generate_thumbnails(
     work_dir: Path,
     api_key: str,
     template_path: Path,
-    prompt_template: str,
+    channel_config: ChannelConfig,
 ) -> list[dict]:
     """Generate thumbnails for each clip in parallel. Detects prompt changes and missing thumbnails."""
     logger.info("[5/6] Generating thumbnails...")
@@ -176,13 +198,25 @@ def generate_thumbnails(
                     clip["title"],
                     extra={"highlighter": None},
                 )
-                thumb = folder / "thumbnail.jpg"
-                if thumb.exists():
-                    thumb.unlink()
+                for stale_asset in (
+                    folder / "thumbnail.jpg",
+                    folder / "generated_thumbnail.png",
+                ):
+                    if stale_asset.exists():
+                        stale_asset.unlink()
         prompt_file.write_text(current_prompt, encoding="utf-8")
 
     tasks = [
-        (i, clip, clips_dir, api_key, template_path, prompt_template)
+        (
+            i,
+            clip,
+            clips_dir,
+            api_key,
+            template_path,
+            channel_config.illustration_prompt_template,
+            channel_config.illustration_center_x,
+            channel_config.illustration_center_y,
+        )
         for i, clip in enumerate(clips)
     ]
 
