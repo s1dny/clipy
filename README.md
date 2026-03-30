@@ -8,6 +8,12 @@
 
 ## Setup
 
+Install project dependencies with:
+
+```bash
+uv sync
+```
+
 To install a `clipper` command into your CLI with `uv`, run:
 
 ```bash
@@ -24,6 +30,20 @@ Copy the `.env.example` to `.env` and fill in the variables
 4. Download the JSON and save it as `client_secrets.json` in the project root
 
 The first run of `upload` will open a browser for OAuth consent. The token is cached at `<work-dir>/.youtube_token.json` for subsequent runs.
+
+## Development
+
+Format the codebase with Ruff:
+
+```bash
+uv run ruff format .
+```
+
+Check lint rules with:
+
+```bash
+uv run ruff check .
+```
 
 ## Usage
 
