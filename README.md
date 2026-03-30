@@ -2,14 +2,16 @@
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.14+
 - [ffmpeg](https://ffmpeg.org/)
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp) (installed as a Python dependency)
 
 ## Setup
 
+To install a `clipper` command into your CLI with `uv`, run:
+
 ```bash
-uv sync
+uv tool install --editable .
 ```
 
 Copy the `.env.example` to `.env` and fill in the variables
@@ -27,10 +29,10 @@ The first run of `upload` will open a browser for OAuth consent. The token is ca
 
 ### Full pipeline
 
-`clipper.sh` requires `--channel <name>` and writes to `./channels/<name>`.
+Use `--channel <name>` to write to `./channels/<name>`.
 
 ```bash
-./clipper.sh --channel philosophy --thumbnail peterson.jpg <youtube-url>
+clipper --channel philosophy --thumbnail peterson.jpg <youtube-url>
 ```
 
 This runs all 6 steps:
@@ -49,7 +51,7 @@ Results are cached per step, so re-running the same URL resumes from where it le
 For a specific channel directory:
 
 ```bash
-./clipper.sh --channel philosophy upload
+clipper --channel philosophy upload
 ```
 
 Uploads all pending clips from the selected channel queue (`channels/<channel>/upload_queue.json`) to YouTube as private, scheduled to publish one per day. Dates are assigned in random order on first run. Each queue item must have a valid `thumbnail_path`.
@@ -59,15 +61,16 @@ Uploads all pending clips from the selected channel queue (`channels/<channel>/u
 | Flag | Description |
 |---|---|
 | `--step N` | Force re-run from step N (1-6), e.g. `--step 5` to regenerate all thumbnails |
-| `--channel NAME` | Required. Uses `./channels/NAME` as the work directory |
+| `--channel NAME` | Optional. Uses `./channels/NAME` as the work directory |
 | `--thumbnail FILE` | Required for URL runs. Resolved from `./thumbnails/FILE` or `./thumbnail/FILE`, and used as the template for each generated clip thumbnail. |
+
+Without `--channel`, clipper uses `./output`. If `YT_CLIP_WORK_DIR` is set, that overrides both defaults.
 
 ## Project structure
 
 ```bash
 clipper/
   main.py              # Thin CLI entrypoint
-  clipper.sh           # Convenience script for running pipeline/upload
   pyproject.toml       # Project metadata and dependencies
   uv.lock              # Locked dependency versions
   clipper/

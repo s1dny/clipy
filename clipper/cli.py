@@ -60,12 +60,32 @@ def _build_parser() -> argparse.ArgumentParser:
         "--thumbnail",
         help="Thumbnail filename for URL runs; used as the template for generated clip thumbnails.",
     )
+    parser.add_argument(
+        "--channel",
+        help="Channel directory name under ./channels to use as the work root.",
+    )
     return parser
 
 
-def _build_paths() -> ClipperPaths:
+def _validate_channel(
+    parser: argparse.ArgumentParser, channel: str | None
+) -> str | None:
+    if channel is None:
+        return None
+    if "/" in channel or channel in {".", ".."}:
+        parser.error("--channel must be a single directory name under ./channels")
+    return channel
+
+
+def _build_paths(channel: str | None) -> ClipperPaths:
     project_root = Path(__file__).resolve().parent.parent
-    work_root = Path(os.environ.get("YT_CLIP_WORK_DIR") or project_root / "output")
+    env_work_dir = os.environ.get("YT_CLIP_WORK_DIR")
+    if env_work_dir:
+        work_root = Path(env_work_dir)
+    elif channel:
+        work_root = project_root / "channels" / channel
+    else:
+        work_root = project_root / "output"
     return ClipperPaths(project_root=project_root, work_root=work_root)
 
 
@@ -182,7 +202,8 @@ def main() -> None:
 
     parser = _build_parser()
     args = parser.parse_args()
-    paths = _build_paths()
+    channel = _validate_channel(parser, args.channel)
+    paths = _build_paths(channel)
 
     if args.url == "upload":
         if args.thumbnail:

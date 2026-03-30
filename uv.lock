@@ -159,7 +159,7 @@ wheels = [
 [[package]]
 name = "clipper"
 version = "1.0.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "assemblyai" },
     { name = "colorlog" },
