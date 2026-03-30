@@ -4,7 +4,7 @@ import os
 import re
 from pathlib import Path
 
-from .common import openrouter_request, run_cmd
+from .common import openrouter_message_text, openrouter_request, run_cmd
 
 FFMPEG = os.environ.get("FFMPEG_PATH", "/opt/homebrew/bin/ffmpeg")
 CLIP_MODEL = os.environ.get("CLIP_MODEL", "google/gemini-3.1-pro-preview")
@@ -49,11 +49,11 @@ Transcript:
         CLIP_EXTRACTION_TIMEOUT,
     )
 
-    content = data["choices"][0]["message"]["content"]
+    content = openrouter_message_text(data)
 
     try:
         clips = json.loads(content)["clips"]
-    except json.JSONDecodeError, KeyError:
+    except (json.JSONDecodeError, KeyError):
         logger.warning("JSON parse error, attempting to fix...")
         # Try to extract JSON from markdown code blocks
         json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)

@@ -9,7 +9,7 @@ import numpy as np
 from PIL import Image
 
 from .clips import clip_folder_name
-from .common import openrouter_request
+from .common import openrouter_message_images, openrouter_request
 from .config import ChannelConfig
 
 IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "black-forest-labs/flux.2-pro")
@@ -38,15 +38,13 @@ def generate_illustration(
             {
                 "model": IMAGE_MODEL,
                 "messages": [{"role": "user", "content": illustration_prompt}],
+                "modalities": ["image"],
                 "provider": {"sort": "price"},
             },
             IMAGE_GENERATION_TIMEOUT,
         )
 
-        message = data["choices"][0]["message"]
-
-        # Check for images array (Gemini format)
-        images = message.get("images", [])
+        images = openrouter_message_images(data)
         if images:
             img_data_url = images[0].get("image_url", {}).get("url", "")
             if img_data_url.startswith("data:image"):
@@ -57,7 +55,7 @@ def generate_illustration(
                 image.save(output_path, "PNG")
                 return True
 
-        logger.error("No image in response")
+        logger.error("No image in OpenRouter response")
         return False
 
     except Exception as e:
