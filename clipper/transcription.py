@@ -13,6 +13,15 @@ MAX_WAIT_SECONDS = 3600
 HTTP_TIMEOUT_SECONDS = 30
 
 
+def build_transcription_config(speech_model: str) -> aai.TranscriptionConfig:
+    """Build a prerecorded request pinned to one configured speech model."""
+    return aai.TranscriptionConfig(
+        speech_models=[speech_model],
+        speaker_labels=True,
+        auto_chapters=False,
+    )
+
+
 def transcribe_audio(audio_path: Path, api_key: str, speech_model: str) -> dict:
     """Upload audio to AssemblyAI and get transcript with speaker diarization."""
     logger.info("[2/6] Transcribing audio with AssemblyAI...")
@@ -20,11 +29,7 @@ def transcribe_audio(audio_path: Path, api_key: str, speech_model: str) -> dict:
     # Use SDK for submission (handles file upload), then poll via REST for reliability
     aai.settings.api_key = api_key
 
-    config = aai.TranscriptionConfig(
-        speech_model=speech_model,
-        speaker_labels=True,
-        auto_chapters=False,
-    )
+    config = build_transcription_config(speech_model)
 
     logger.debug("Starting transcription with %s", speech_model)
 
