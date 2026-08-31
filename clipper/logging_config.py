@@ -1,5 +1,4 @@
 import logging
-import os
 
 from rich.console import Console
 from rich.logging import RichHandler
@@ -28,7 +27,7 @@ def create_progress(*columns, transient: bool = False) -> Progress:
     return Progress(*columns, console=_CONSOLE, transient=transient, expand=True)
 
 
-def setup_logging():
+def setup_logging() -> None:
     """Configure project logging with Rich output and tracebacks."""
     logger = logging.getLogger("clipper")
     if logger.handlers:
@@ -45,7 +44,6 @@ def setup_logging():
     )
     handler.setFormatter(logging.Formatter("%(message)s"))
 
-    log_level = os.environ.get("CLIPPER_LOG_LEVEL", "DEBUG")
-    logger.setLevel(getattr(logging, log_level.upper(), logging.DEBUG))
+    logger.setLevel(logging.INFO)
     logger.addHandler(handler)
     logger.propagate = False

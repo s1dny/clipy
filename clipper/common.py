@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -9,14 +8,12 @@ from urllib.parse import parse_qs, urlparse
 
 import requests
 
-OPENROUTER_API_URL = os.environ.get(
-    "OPENROUTER_API_URL", "https://openrouter.ai/api/v1/chat/completions"
-)
+OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 logger = logging.getLogger(__name__)
 
 
-def openrouter_request(api_key: str, body: dict, timeout: int) -> dict:
+def openrouter_request(api_key: str, body: dict, timeout: int) -> dict[str, Any]:
     """Make a request to OpenRouter API and return the parsed response."""
     resp = requests.post(
         OPENROUTER_API_URL,
@@ -129,7 +126,7 @@ def run_cmd(cmd: list[str], cwd: str | None = None) -> tuple[int, str, str]:
     if len(cmd_str) > 64:
         cmd_str = cmd_str[:61] + "..."
     logger.debug("Running: %s", cmd_str)
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, check=False)
     return result.returncode, result.stdout, result.stderr
 
 

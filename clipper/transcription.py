@@ -1,5 +1,4 @@
 import logging
-import os
 import time
 from pathlib import Path
 
@@ -9,18 +8,12 @@ from rich.progress import SpinnerColumn, TextColumn, TimeElapsedColumn
 
 from .logging_config import create_progress
 
-ASSEMBLYAI_SPEECH_MODELS = os.environ.get(
-    "ASSEMBLYAI_SPEECH_MODELS", "universal-3-pro"
-).split(",")
-MAX_TRANSCRIPTION_WAIT_SECONDS = int(
-    os.environ.get("MAX_TRANSCRIPTION_WAIT_SECONDS", "3600")
-)
-HTTP_TIMEOUT = int(os.environ.get("HTTP_TIMEOUT", "30"))
-
 logger = logging.getLogger(__name__)
+MAX_WAIT_SECONDS = 3600
+HTTP_TIMEOUT_SECONDS = 30
 
 
-def transcribe_audio(audio_path: Path, api_key: str) -> dict:
+def transcribe_audio(audio_path: Path, api_key: str, speech_model: str) -> dict:
     """Upload audio to AssemblyAI and get transcript with speaker diarization."""
     logger.info("[2/6] Transcribing audio with AssemblyAI...")
 
@@ -28,12 +21,12 @@ def transcribe_audio(audio_path: Path, api_key: str) -> dict:
     aai.settings.api_key = api_key
 
     config = aai.TranscriptionConfig(
-        speech_models=ASSEMBLYAI_SPEECH_MODELS,
+        speech_model=speech_model,
         speaker_labels=True,
         auto_chapters=False,
     )
 
-    logger.debug("Starting transcription with %s", ASSEMBLYAI_SPEECH_MODELS[0])
+    logger.debug("Starting transcription with %s", speech_model)
 
     transcriber = aai.Transcriber(config=config)
     transcript = transcriber.submit(str(audio_path))
@@ -57,16 +50,16 @@ def transcribe_audio(audio_path: Path, api_key: str) -> dict:
 
         while True:
             elapsed = time.time() - start_time
-            if elapsed > MAX_TRANSCRIPTION_WAIT_SECONDS:
-                raise TimeoutError(
-                    f"Transcription timed out after {MAX_TRANSCRIPTION_WAIT_SECONDS}s"
-                )
+            if elapsed > MAX_WAIT_SECONDS:
+                raise TimeoutError(f"Transcription timed out after {MAX_WAIT_SECONDS}s")
 
             mins, secs = divmod(int(elapsed), 60)
 
             try:
                 resp = requests.get(
-                    poll_url, headers=poll_headers, timeout=HTTP_TIMEOUT
+                    poll_url,
+                    headers=poll_headers,
+                    timeout=HTTP_TIMEOUT_SECONDS,
                 )
                 resp.raise_for_status()
                 data = resp.json()

@@ -1,41 +1,32 @@
 import json
 import logging
-import os
 import re
 from pathlib import Path
 
 from .common import openrouter_message_text, openrouter_request, run_cmd
 
-FFMPEG = os.environ.get("FFMPEG_PATH", "/opt/homebrew/bin/ffmpeg")
-CLIP_MODEL = os.environ.get("CLIP_MODEL", "google/gemini-3.1-pro-preview")
-CLIP_EXTRACTION_TIMEOUT = int(os.environ.get("CLIP_EXTRACTION_TIMEOUT", "3600"))
-
 logger = logging.getLogger(__name__)
+CLIP_TIMEOUT_SECONDS = 3600
 
 
 def extract_clips(
-    sentences: list[dict], api_key: str, prompt_template: str
+    sentences: list[dict],
+    api_key: str,
+    prompt_template: str,
+    model: str,
 ) -> list[dict]:
     """Use LLM to extract interesting clip segments from sentence transcript."""
     logger.info("[3/6] Extracting clip segments with LLM...")
 
     transcript_text = json.dumps(sentences)
 
-    # Build prompt from config template
-    prompt = (
-        prompt_template
-        + f"""
+    prompt = f"{prompt_template}\n\nTranscript:\n{transcript_text}"
 
-Transcript:
-{transcript_text}
-"""
-    )
-
-    logger.debug("Using model: %s", CLIP_MODEL)
+    logger.debug("Using model: %s", model)
     data = openrouter_request(
         api_key,
         {
-            "model": CLIP_MODEL,
+            "model": model,
             "messages": [
                 {
                     "role": "system",
@@ -46,14 +37,14 @@ Transcript:
             "provider": {"sort": "price"},
             "thinking": {"type": "enabled", "budget_tokens": 100000},
         },
-        CLIP_EXTRACTION_TIMEOUT,
+        CLIP_TIMEOUT_SECONDS,
     )
 
     content = openrouter_message_text(data)
 
     try:
         clips = json.loads(content)["clips"]
-    except (json.JSONDecodeError, KeyError):
+    except json.JSONDecodeError, KeyError:
         logger.warning("JSON parse error, attempting to fix...")
         # Try to extract JSON from markdown code blocks
         json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
@@ -86,14 +77,18 @@ Transcript:
 
 
 def cut_clip(
-    video_path: Path, _audio_path: Path, start_ms: int, end_ms: int, output_path: Path
+    video_path: Path,
+    start_ms: int,
+    end_ms: int,
+    output_path: Path,
+    ffmpeg_path: str,
 ) -> bool:
     """Cut and re-encode a clip to high-quality 1080p H.264."""
     start_sec = start_ms / 1000
     duration_sec = (end_ms - start_ms) / 1000
 
     common = [
-        FFMPEG,
+        ffmpeg_path,
         "-y",
         "-ss",
         str(start_sec),
@@ -172,7 +167,7 @@ def clip_folder_name(i: int, title: str) -> str:
 
 
 def cut_clips(
-    video_path: Path, audio_path: Path, clips: list[dict], work_dir: Path
+    video_path: Path, clips: list[dict], work_dir: Path, ffmpeg_path: str
 ) -> list[dict]:
     """Cut clips from the source video. Detects title changes and renames folders."""
     logger.info("[4/6] Cutting clips...")
@@ -212,7 +207,11 @@ def cut_clips(
                 extra={"highlighter": None},
             )
             if cut_clip(
-                video_path, audio_path, clip["start_ms"], clip["end_ms"], clip_path
+                video_path,
+                clip["start_ms"],
+                clip["end_ms"],
+                clip_path,
+                ffmpeg_path,
             ):
                 clip["clip_path"] = str(clip_path)
             else:

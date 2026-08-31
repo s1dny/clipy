@@ -1,8 +1,7 @@
 import logging
-import os
 import random
 import sys
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from rich.progress import (
@@ -15,30 +14,24 @@ from rich.progress import (
 )
 
 from .common import write_json_file
+from .config import YouTubeConfig
 from .logging_config import create_progress
 from .queue import load_queue
 
 logger = logging.getLogger(__name__)
 
 YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
-PUBLISH_HOUR_UTC = int(os.environ.get("PUBLISH_HOUR_UTC", "12"))
-YOUTUBE_CATEGORY_ID = os.environ.get("YOUTUBE_CATEGORY_ID", "22")
 
 
-def get_youtube_service(work_root: Path, project_root: Path | None = None):
+def get_youtube_service(work_root: Path, project_root: Path):
     """Authenticate with YouTube API and return service object."""
     from google.auth.exceptions import RefreshError
     from google.oauth2.credentials import Credentials
     from google_auth_oauthlib.flow import InstalledAppFlow
     from googleapiclient.discovery import build
 
-    if project_root is None:
-        project_root = Path(__file__).resolve().parent.parent
-
     token_path = work_root / ".youtube_token.json"
-    client_secrets = Path(
-        os.environ.get("YOUTUBE_CLIENT_SECRETS", project_root / "client_secrets.json")
-    )
+    client_secrets_path = project_root / "client_secrets.json"
 
     creds = None
     if token_path.exists():
@@ -59,13 +52,16 @@ def get_youtube_service(work_root: Path, project_root: Path | None = None):
                     pass
 
         if not creds or not creds.valid:
-            if not client_secrets.exists():
-                logger.error("YouTube client secrets not found at %s", client_secrets)
+            if not client_secrets_path.exists():
+                logger.error(
+                    "YouTube client secrets not found at %s",
+                    client_secrets_path,
+                )
                 logger.error("Download OAuth 2.0 credentials from Google Cloud Console")
                 logger.error("and save as client_secrets.json in the project root.")
                 sys.exit(1)
             flow = InstalledAppFlow.from_client_secrets_file(
-                str(client_secrets), YOUTUBE_SCOPES
+                str(client_secrets_path), YOUTUBE_SCOPES
             )
             creds = flow.run_local_server(port=0, open_browser=False)
 
@@ -75,9 +71,14 @@ def get_youtube_service(work_root: Path, project_root: Path | None = None):
 
 
 def upload_single_video(
-    youtube, item: dict, thumbnail_path: Path, description_template: str
+    youtube,
+    item: dict,
+    thumbnail_path: Path,
+    description_template: str,
+    settings: YouTubeConfig,
 ) -> bool:
     """Upload a single video to YouTube as unlisted."""
+    from googleapiclient.errors import HttpError
     from googleapiclient.http import MediaFileUpload
 
     title = item["title"]
@@ -111,10 +112,9 @@ def upload_single_video(
         original_url=original_url,
     )
 
-    # Schedule for the assigned date at 12:00 UTC if available
     scheduled_date = item.get("scheduled_date")
     if scheduled_date:
-        publish_at = f"{scheduled_date}T{PUBLISH_HOUR_UTC:02d}:00:00Z"
+        publish_at = f"{scheduled_date}T{settings.publish_hour_utc:02d}:00:00Z"
         status_body = {
             "privacyStatus": "private",
             "publishAt": publish_at,
@@ -129,7 +129,7 @@ def upload_single_video(
         "snippet": {
             "title": title,
             "description": description,
-            "categoryId": YOUTUBE_CATEGORY_ID,
+            "categoryId": settings.category_id,
         },
         "status": status_body,
     }
@@ -175,13 +175,15 @@ def upload_single_video(
                 media_body=MediaFileUpload(str(thumbnail_path), mimetype="image/jpeg"),
             ).execute()
             logger.info("Thumbnail set")
-        except Exception as e:
-            logger.warning("Could not set thumbnail: %s", e)
+        except (HttpError, OSError) as exc:
+            logger.warning("Could not set thumbnail: %s", exc)
 
         return True
 
-    except Exception as e:
-        logger.error("Upload failed for %r: %s", title, e, extra={"highlighter": None})
+    except (HttpError, KeyError, OSError) as exc:
+        logger.error(
+            "Upload failed for %r: %s", title, exc, extra={"highlighter": None}
+        )
         return False
 
 
@@ -195,24 +197,27 @@ def _parse_scheduled_date(scheduled_date: str | None) -> date | None:
         return None
 
 
-def _publish_at_for_date(scheduled_day: date) -> datetime:
+def _publish_at_for_date(scheduled_day: date, publish_hour_utc: int) -> datetime:
     return datetime.combine(
         scheduled_day,
         datetime.min.time(),
-        tzinfo=timezone.utc,
-    ) + timedelta(hours=PUBLISH_HOUR_UTC)
+        tzinfo=UTC,
+    ) + timedelta(hours=publish_hour_utc)
 
 
-def _next_schedulable_date(now: datetime) -> date:
+def _next_schedulable_date(now: datetime, publish_hour_utc: int) -> date:
     today = now.date()
-    if _publish_at_for_date(today) > now:
+    if _publish_at_for_date(today, publish_hour_utc) > now:
         return today
     return today + timedelta(days=1)
 
 
 def upload_from_queue(
-    queue_file: Path, description_template: str, project_root: Path | None = None
-):
+    queue_file: Path,
+    description_template: str,
+    settings: YouTubeConfig,
+    project_root: Path,
+) -> None:
     """Process the upload queue: assign dates and upload due videos."""
     if not queue_file.exists():
         logger.warning("No upload queue found. Run the pipeline first.")
@@ -243,8 +248,8 @@ def upload_from_queue(
         return
 
     # Assign scheduled dates to pending items starting from the earliest future slot.
-    now = datetime.now(timezone.utc)
-    minimum_date = _next_schedulable_date(now)
+    now = datetime.now(UTC)
+    minimum_date = _next_schedulable_date(now, settings.publish_hour_utc)
     reserved_dates = set()
     pending_to_assign = []
     pending_ids = {id(item) for item in pending}
@@ -255,7 +260,7 @@ def upload_from_queue(
             pending_to_assign.append(item)
             continue
 
-        if _publish_at_for_date(scheduled_day) <= now:
+        if _publish_at_for_date(scheduled_day, settings.publish_hour_utc) <= now:
             logger.info(
                 "Rescheduling past-due upload '%s' from %s",
                 item["title"],
@@ -272,7 +277,7 @@ def upload_from_queue(
         scheduled_day = _parse_scheduled_date(item.get("scheduled_date"))
         if scheduled_day is None:
             continue
-        if _publish_at_for_date(scheduled_day) > now:
+        if _publish_at_for_date(scheduled_day, settings.publish_hour_utc) > now:
             reserved_dates.add(scheduled_day)
 
     unscheduled = [item for item in pending_to_assign if not item.get("scheduled_date")]
@@ -343,11 +348,11 @@ def upload_from_queue(
     for item in pending:
         thumbnail_path = resolved_thumbnails[item["clip_path"]]
         success = upload_single_video(
-            youtube, item, thumbnail_path, description_template
+            youtube, item, thumbnail_path, description_template, settings
         )
         if success:
             item["status"] = "uploaded"
-            item["uploaded_at"] = datetime.now(timezone.utc).isoformat()
+            item["uploaded_at"] = datetime.now(UTC).isoformat()
         else:
             item["status"] = "failed"
 

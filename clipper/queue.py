@@ -1,6 +1,6 @@
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .common import write_json_file
@@ -70,7 +70,7 @@ def save_queue(clips: list[dict], queue_file: Path) -> None:
             "clip_path": clip_path,
             "thumbnail_path": clip.get("thumbnail_path"),
             "status": "pending",
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
         }
         queue.append(item)
         queue_by_clip_path[clip_path] = item

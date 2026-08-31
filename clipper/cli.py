@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 from .clips import cut_clips, extract_clips
 from .common import load_or_compute
-from .config import ChannelConfig, load_channel_config
+from .config import AppConfig, load_config
 from .download import download_video
 from .logging_config import setup_logging
 from .paths import ClipperPaths
@@ -36,7 +36,7 @@ class PipelineRun:
     url: str
     work_dir: Path
     thumbnail_template: Path
-    channel_config: ChannelConfig
+    config: AppConfig
     assemblyai_key: str
     openrouter_key: str
     force_step: int | None
@@ -69,11 +69,7 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _validate_channel(
-    parser: argparse.ArgumentParser, channel: str | None
-) -> str | None:
-    if channel is None:
-        return None
+def _validate_channel(parser: argparse.ArgumentParser, channel: str) -> str:
     if "/" in channel or channel in {".", ".."}:
         parser.error("--channel must be a single directory name under ./channels")
     return channel
@@ -96,7 +92,7 @@ def _build_pipeline_run(
     args: argparse.Namespace,
     parser: argparse.ArgumentParser,
     paths: ClipperPaths,
-    channel_config: ChannelConfig,
+    config: AppConfig,
 ) -> PipelineRun:
     if args.url is None:
         parser.error("URL is required (use 'upload' command to upload from queue)")
@@ -117,7 +113,7 @@ def _build_pipeline_run(
         url=args.url,
         work_dir=paths.work_dir_for_url(args.url),
         thumbnail_template=thumbnail_template,
-        channel_config=channel_config,
+        config=config,
         assemblyai_key=_require_env(parser, "ASSEMBLYAI_API_KEY"),
         openrouter_key=_require_env(parser, "OPENROUTER_API_KEY"),
         force_step=args.step,
@@ -156,7 +152,7 @@ def _maybe_download(run: PipelineRun) -> tuple[Path, Path]:
         logger.info("[1/6] Downloading video and extracting audio")
         logger.info("Skipping: video and audio already exist")
         return video_path, audio_path
-    return download_video(run.url, run.work_dir)
+    return download_video(run.url, run.work_dir, run.config.runtime.ffmpeg_path)
 
 
 def _run_pipeline(run: PipelineRun, paths: ClipperPaths) -> None:
@@ -175,6 +171,7 @@ def _run_pipeline(run: PipelineRun, paths: ClipperPaths) -> None:
         transcribe_audio,
         audio_path,
         run.assemblyai_key,
+        run.config.models.speech,
         skip_message="[2/6] Transcribing audio with AssemblyAI... skipped: transcript already exists",
     )
     sentences = load_or_compute(
@@ -187,16 +184,19 @@ def _run_pipeline(run: PipelineRun, paths: ClipperPaths) -> None:
         extract_clips,
         sentences,
         run.openrouter_key,
-        run.channel_config.clip_extraction_prompt_template,
+        run.config.channel.clip_extraction_prompt_template,
+        run.config.models.clip,
         skip_message="[3/6] Extracting clip segments with LLM... skipped: clips already extracted",
     )
-    clips = cut_clips(video_path, audio_path, clips, run.work_dir)
+    clips = cut_clips(video_path, clips, run.work_dir, run.config.runtime.ffmpeg_path)
     clips = generate_thumbnails(
         clips,
         run.work_dir,
         run.openrouter_key,
         run.thumbnail_template,
-        run.channel_config,
+        run.config.channel,
+        run.config.models.image,
+        run.config.thumbnails,
     )
     save_queue(clips, paths.queue_file)
 
@@ -204,34 +204,32 @@ def _run_pipeline(run: PipelineRun, paths: ClipperPaths) -> None:
 
 
 def main() -> None:
-    setup_logging()
-    load_dotenv()
-
     parser = _build_parser()
     args = parser.parse_args()
     channel = _validate_channel(parser, args.channel)
-    if channel is None:
-        parser.error("--channel is required")
     paths = _build_paths(channel)
+    load_dotenv(paths.project_root / ".env")
     try:
-        channel_config = load_channel_config(paths.project_root, channel)
+        config = load_config(paths.project_root, channel)
     except ValueError as exc:
         parser.error(str(exc))
+    setup_logging()
 
     if args.url == "upload":
         if args.thumbnail:
             parser.error("--thumbnail is not used with 'upload'.")
         upload_from_queue(
             paths.queue_file,
-            channel_config.description_template,
+            config.channel.description_template,
+            config.youtube,
             paths.project_root,
         )
         return
 
-    run = _build_pipeline_run(args, parser, paths, channel_config)
+    run = _build_pipeline_run(args, parser, paths, config)
     try:
         _run_pipeline(run, paths)
-    except Exception as exc:
-        logger.exception("Pipeline failed: %s", exc)
+    except Exception:
+        logger.exception("Pipeline failed")
         logger.info("Re-run with the same URL to resume from the last successful step.")
         sys.exit(1)

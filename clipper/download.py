@@ -1,16 +1,19 @@
 import logging
-import os
 import sys
 from pathlib import Path
 
 from .common import run_cmd
 
-FFMPEG = os.environ.get("FFMPEG_PATH", "/opt/homebrew/bin/ffmpeg")
-
 logger = logging.getLogger(__name__)
 
 
-def download_video(youtube_url: str, work_dir: Path) -> tuple[Path, Path]:
+class MediaCommandError(RuntimeError):
+    """Raised when yt-dlp or FFmpeg fails."""
+
+
+def download_video(
+    youtube_url: str, work_dir: Path, ffmpeg_path: str
+) -> tuple[Path, Path]:
     """Download video from YouTube and extract audio with ffmpeg."""
     logger.info("[1/6] Downloading video and extracting audio...")
 
@@ -18,7 +21,7 @@ def download_video(youtube_url: str, work_dir: Path) -> tuple[Path, Path]:
 
     # Download video with audio
     video_path = work_dir / "video.mp4"
-    code, out, err = run_cmd(
+    code, _out, err = run_cmd(
         [
             *[sys.executable, "-m", "yt_dlp"],
             "-f",
@@ -34,7 +37,7 @@ def download_video(youtube_url: str, work_dir: Path) -> tuple[Path, Path]:
     )
     if code != 0:
         logger.error("Error downloading video: %s", err)
-        raise Exception(f"yt-dlp video failed: {err}")
+        raise MediaCommandError(f"yt-dlp video failed: {err}")
 
     # Find the actual video file (yt-dlp may modify filename)
     if not video_path.exists():
@@ -46,9 +49,9 @@ def download_video(youtube_url: str, work_dir: Path) -> tuple[Path, Path]:
 
     # Extract audio with ffmpeg
     audio_path = work_dir / "audio.mp3"
-    code, out, err = run_cmd(
+    code, _out, err = run_cmd(
         [
-            FFMPEG,
+            ffmpeg_path,
             "-y",
             "-i",
             str(video_path),
@@ -62,7 +65,7 @@ def download_video(youtube_url: str, work_dir: Path) -> tuple[Path, Path]:
     )
     if code != 0:
         logger.error("Error extracting audio: %s", err)
-        raise Exception(f"ffmpeg audio extraction failed: {err}")
+        raise MediaCommandError(f"ffmpeg audio extraction failed: {err}")
 
     logger.info("Video: %s", video_path)
     logger.info("Audio: %s", audio_path)

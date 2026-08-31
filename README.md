@@ -20,11 +20,16 @@ To install a `clipper` command into your CLI with `uv`, run:
 uv tool install --editable .
 ```
 
-Copy the `.env.example` to `.env` and fill in the variables.
+Copy `.env.example` to `.env` and add the two API keys. Secrets are the only
+settings kept in `.env`.
 
 Copy `config.toml.example` to `config.toml` and customize it for your channels.
 
-`config.toml` uses `[defaults]` for shared templates and `[channels.<name>]` for channel-specific overrides. Any missing template falls back to `[defaults]`. Thumbnail illustration placement can also be overridden per channel with `illustration_center_x` and `illustration_center_y`.
+`config.toml` contains all non-secret settings. The `[runtime]`, `[models]`,
+`[thumbnails]`, and `[youtube]` tables configure the pipeline. `[models]` groups
+the clip, image, and speech model names. `[defaults]` provides shared templates
+and `[channels.<name>]` provides channel overrides. Any missing channel value
+falls back to `[defaults]`.
 
 ### YouTube upload setup
 

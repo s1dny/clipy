@@ -1,3 +1,18 @@
+[runtime]
+ffmpeg_path = "/opt/homebrew/bin/ffmpeg"
+
+[models]
+clip = "google/gemini-3.7-flash"
+image = "google/gemini-3.1-flash-image"
+speech = "universal-3-5-pro"
+
+[thumbnails]
+illustration_size = [700, 700]
+
+[youtube]
+publish_hour_utc = 12
+category_id = "22"
+
 [defaults]
 description_template = """
 {clip_description}
