@@ -35,6 +35,10 @@ class ClipperPaths:
     def prompt_overrides_file(self) -> Path:
         return self.work_root / "prompt_overrides.json"
 
+    @property
+    def reach_file(self) -> Path:
+        return self.work_root / "reach.json"
+
     def work_dir_for_url(self, url: str) -> Path:
         return self.work_root / extract_video_id(url)
 

@@ -35,7 +35,7 @@ from starlette.responses import PlainTextResponse
 from starlette.routing import Route
 from yt_dlp.utils import download_range_func
 
-from . import costs
+from . import costs, reach
 from .cli import build_paths, load_app_config, make_run, run_pipeline
 from .common import extract_video_id, read_json_file, run_cmd, write_json_file
 from .config import PROMPT_KEYS, AppConfig
@@ -179,6 +179,15 @@ def _processed_sources() -> set[str]:
     return seen
 
 
+def _reach() -> dict | str:
+    """Impressions/CTR history, or why it is unavailable (never fatal)."""
+    try:
+        return reach.sync(_token(), paths.reach_file)
+    except Exception as exc:  # noqa: BLE001 - reports still work without CTR
+        logger.warning("Reach reports unavailable: %s", exc)
+        return f"unavailable: {exc}"
+
+
 def _analytics(**query: Any) -> list[dict]:
     response = (
         get_analytics_service(_token())
@@ -219,6 +228,8 @@ def _channel_report(days: int) -> dict:
         **window,
     )
     by_id = {v["id"]: v for v in _channel_videos(refresh=True)}
+    reach_data = _reach()
+    ctr = reach.totals(reach_data, start, end) if isinstance(reach_data, dict) else {}
     videos = []
     for row in per_video:
         meta = by_id.get(row["video"], {})
@@ -237,13 +248,18 @@ def _channel_report(days: int) -> dict:
                 "avg_view_seconds": row["averageViewDuration"],
                 "avg_view_percent": round(row["averageViewPercentage"], 1),
                 "subscribers_gained": row["subscribersGained"],
+                **ctr.get(row["video"], {}),
             }
         )
     revenue = sum(d["estimatedRevenue"] for d in daily)
     spend = _spend_since(start)
     return {
         "window": window,
-        "note": "Revenue lags 2-3 days; the last days of the window read low.",
+        "note": (
+            "Revenue lags 2-3 days, and impressions/ctr_percent (from YouTube's "
+            "daily reach reports) about 2 days; the last days of the window read low."
+            + ("" if isinstance(reach_data, dict) else f" Reach: {reach_data}")
+        ),
         "totals": {
             "views": sum(d["views"] for d in daily),
             "watch_hours": round(sum(d["estimatedMinutesWatched"] for d in daily) / 60),
@@ -295,13 +311,12 @@ def _video_report(video_id: str, days: int) -> dict:
         ],
         "traffic_sources": traffic,
     }
-    try:
-        report["impressions"] = _analytics(
-            metrics="videoThumbnailImpressions,videoThumbnailImpressionsClickRate",
-            **window,
-        )
-    except Exception as exc:  # noqa: BLE001 - optional metric, older API versions lack it
-        report["impressions"] = f"unavailable: {exc}"
+    reach_data = _reach()
+    report["impressions_daily"] = (
+        reach.daily(reach_data, video_id, end - timedelta(days=days))
+        if isinstance(reach_data, dict)
+        else reach_data
+    )
     return report
 
 
@@ -576,15 +591,16 @@ def tool(annotations: ToolAnnotations):
 async def channel_report(days: int = 28) -> dict:
     """Channel performance for the last `days` days: totals (views, watch hours,
     revenue, API spend, profit), daily views/revenue, and every video with views
-    in the window ranked by revenue (with RPM, retention %, lifetime views)."""
+    in the window ranked by revenue (with RPM, retention %, lifetime views, and
+    thumbnail impressions and click-through rate)."""
     return await _sync(_channel_report, days)
 
 
 @tool(READ)
 async def video_report(video_id: str, days: int = 90) -> dict:
     """Deep dive on one of the channel's videos: metadata, retention curve every
-    10% (with performance vs similar videos), traffic sources, and thumbnail
-    impressions/CTR when the API provides them."""
+    10% (with performance vs similar videos), traffic sources, and daily
+    thumbnail impressions and click-through rate (about 2 days behind)."""
     return await _sync(_video_report, video_id, days)
 
 
