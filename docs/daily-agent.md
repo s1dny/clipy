@@ -47,13 +47,3 @@ ssh azalab-0 kubectl -n clipper create job --from=cronjob/clipper-agent agent-ma
 Logs are in `kubectl -n clipper logs job/<name>`, past run summaries in
 `/srv/clipper/codex/runs/` on azalab-0, and the agent's own notebook behind the
 `read_notes` tool.
-
-## What the server enforces regardless of the prompt
-
-- `publish_clip` only uploads on the batch weekday (`CLIPPER_BATCH_WEEKDAY`,
-  default Monday, in `CLIPPER_TIMEZONE`, default Australia/Sydney), only as a
-  scheduled private video 12 hours to 8 days ahead, and refuses a second video
-  going live on any Sydney day (channel videos and queued uploads alike).
-- `process_source` refuses sources already clipped (local work directories,
-  queue, and every `Original:` link in the channel's descriptions) and runs
-  one source at a time.

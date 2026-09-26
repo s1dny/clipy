@@ -1,48 +1,15 @@
-import json
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .common import write_json_file
+from .common import read_json_file, write_json_file
 
 logger = logging.getLogger(__name__)
 
 
 def load_queue(queue_file: Path) -> list[dict]:
-    """Load the upload queue, tolerating empty or invalid JSON files."""
-    if not queue_file.exists():
-        return []
-
-    try:
-        with queue_file.open(encoding="utf-8") as f:
-            raw = f.read().strip()
-    except OSError as exc:
-        logger.warning("Could not read queue file %s: %s", queue_file, exc)
-        return []
-
-    if not raw:
-        logger.warning("Queue file is empty; treating as a new queue: %s", queue_file)
-        return []
-
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        logger.warning(
-            "Queue file is invalid JSON; resetting queue %s: %s", queue_file, exc
-        )
-        return []
-
-    if not isinstance(data, list):
-        logger.warning(
-            "Queue file must contain a JSON array; resetting queue %s", queue_file
-        )
-        return []
-
-    for item in data:
-        if isinstance(item, dict):
-            item.pop("upload_thumbnail", None)
-
-    return data
+    """The channel's clip queue; a missing file is an empty queue."""
+    return read_json_file(queue_file) if queue_file.exists() else []
 
 
 def save_queue(clips: list[dict], queue_file: Path) -> None:
@@ -61,7 +28,6 @@ def save_queue(clips: list[dict], queue_file: Path) -> None:
         if existing:
             if clip.get("thumbnail_path"):
                 existing["thumbnail_path"] = clip["thumbnail_path"]
-            existing.pop("upload_thumbnail", None)
             continue
 
         item = {

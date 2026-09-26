@@ -29,7 +29,6 @@ class ThumbnailConfig:
 
 @dataclass(frozen=True)
 class YouTubeConfig:
-    publish_hour_utc: int
     category_id: str
 
 
@@ -40,7 +39,7 @@ class ChannelConfig:
     illustration_prompt_template: str
     illustration_center_x: int
     illustration_center_y: int
-    thumbnail_template: str | None
+    thumbnail_template: str
 
 
 PROMPT_KEYS = (
@@ -134,7 +133,7 @@ def _channel_config(
         ),
         illustration_center_x=_value(merged, "illustration_center_x", int, 850),
         illustration_center_y=_value(merged, "illustration_center_y", int, 350),
-        thumbnail_template=merged.get("thumbnail_template"),
+        thumbnail_template=_value(merged, "thumbnail_template", str),
     )
 
 
@@ -147,12 +146,6 @@ def load_config(
     models = _table(data, "models")
     thumbnails = _table(data, "thumbnails")
     youtube = _table(data, "youtube")
-
-    publish_hour = _value(youtube, "publish_hour_utc", int, 12)
-    if not 0 <= publish_hour <= 23:
-        raise ConfigError(
-            "config.toml field 'publish_hour_utc' must be between 0 and 23"
-        )
 
     return AppConfig(
         runtime=RuntimeConfig(
@@ -170,7 +163,6 @@ def load_config(
             illustration_size=_int_pair(thumbnails, "illustration_size", [700, 700]),
         ),
         youtube=YouTubeConfig(
-            publish_hour_utc=publish_hour,
             category_id=_value(youtube, "category_id", str, "22"),
         ),
         channel=_channel_config(data, channel, _read_overrides(overrides_path)),

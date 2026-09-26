@@ -1,8 +1,9 @@
 """MCP server that lets a scheduled agent run one clip channel end to end.
 
 Everything slow (downloading, transcribing, cutting, uploading) runs as a
-background job so a tool call returns in seconds; the agent polls `jobs`.
-The one-upload-per-day rule is enforced here, not left to the prompt.
+background job so a tool call returns in seconds. The tools are mechanism
+only: the channel's policy (what to clip, when to publish) lives in the
+agent's prompt.
 """
 
 import functools
@@ -43,17 +44,12 @@ from .logging_config import setup_logging
 from .queue import item_id, load_queue
 from .thumbnails import render_thumbnail
 from .transcription import transcribe_audio
-from .upload import get_analytics_service, get_youtube_service, upload_single_video
+from .upload import get_analytics_service, get_youtube_service, upload_video
 
 logger = logging.getLogger(__name__)
 
 CHANNEL = os.environ.get("CLIPPER_CHANNEL", "blow")
 LOCAL_TZ = ZoneInfo(os.environ.get("CLIPPER_TIMEZONE", "Australia/Sydney"))
-# Uploads go up once a week as scheduled private videos, because the API cannot
-# turn on monetization: Aiden switches it on for the whole batch in Studio.
-BATCH_WEEKDAY = os.environ.get("CLIPPER_BATCH_WEEKDAY", "Monday")
-MIN_LEAD = timedelta(hours=12)
-MAX_AHEAD = timedelta(days=8)
 VIDEO_ID_RE = re.compile(r"(?:youtube\.com/watch\?v=|youtu\.be/)([\w-]{11})")
 DURATION_RE = re.compile(r"P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?")
 CHANNEL_CACHE_SECONDS = 600
@@ -91,10 +87,6 @@ def _seconds(iso_duration: str) -> int:
 def _parse_time(value: str) -> datetime:
     parsed = datetime.fromisoformat(value)
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
-
-
-def _local_day(moment: datetime) -> date:
-    return moment.astimezone(LOCAL_TZ).date()
 
 
 # --- channel data -----------------------------------------------------------
@@ -486,7 +478,7 @@ def _queue() -> list[dict]:
 
 def _find_item(queue: list[dict], wanted: str) -> dict:
     for item in queue:
-        if item.get("clip_path") and item_id(item) == wanted:
+        if item_id(item) == wanted:
             return item
     raise ValueError(f"No queued clip with id {wanted!r}; call list_queue.")
 
@@ -508,73 +500,33 @@ def _queue_view(item: dict) -> dict:
     }
 
 
-def _check_schedule(publish_at: datetime) -> None:
-    """Uploads only on the batch weekday, each at least MIN_LEAD ahead (time to
-    turn on monetization), and at most one video going live per local day."""
-    now = datetime.now(UTC)
-    today = now.astimezone(LOCAL_TZ)
-    if today.strftime("%A") != BATCH_WEEKDAY:
-        raise ValueError(
-            f"Uploads happen only in the weekly batch on {BATCH_WEEKDAY} "
-            f"({LOCAL_TZ.key}); today is {today:%A}. Nothing was uploaded."
-        )
-    if publish_at < now + MIN_LEAD:
-        raise ValueError(
-            "publish_at must be at least 12 hours ahead, so monetization can be "
-            "switched on in Studio before the video goes live."
-        )
-    if publish_at > now + MAX_AHEAD:
-        raise ValueError("publish_at must be within the next 8 days.")
-    publish_day = _local_day(publish_at)
-    for job in jobs.active("publish"):
-        queued = job["args"].get("publish_at")
-        if queued and _local_day(_parse_time(queued)) == publish_day:
-            raise ValueError(
-                f"A queued upload already goes live on {publish_day} ({LOCAL_TZ.key})."
-            )
-    for video in _channel_videos(refresh=True):
-        if _local_day(_parse_time(video["publish_time"])) == publish_day:
-            raise ValueError(
-                f"{video['title']!r} already goes live on {publish_day} "
-                f"({LOCAL_TZ.key}). One video per day; pick another day."
-            )
-
-
 def _publish_job(args: dict) -> str:
     config = _config()
     queue = _queue()
     item = _find_item(queue, args["item_id"])
     if item["status"] != "pending":
         raise ValueError(f"Clip is {item['status']}, not pending.")
-    if args.get("publish_at"):
-        item["publish_at"] = args["publish_at"]
-        item.pop("privacy", None)
-    else:
-        item["privacy"] = "public"
-        item.pop("publish_at", None)
-    youtube = get_youtube_service(_token())
-    ok = upload_single_video(
-        youtube,
-        item,
-        Path(item["thumbnail_path"]),
-        config.channel.description_template,
-        config.youtube,
-    )
-    item["status"] = "uploaded" if ok else "failed"
+    item["publish_at"] = args.get("publish_at")
+    try:
+        upload_video(
+            get_youtube_service(_token()),
+            item,
+            config.channel.description_template,
+            config.youtube.category_id,
+        )
+    except Exception:
+        item["status"] = "failed"
+        write_json_file(paths.queue_file, queue)
+        raise
+    item["status"] = "uploaded"
     item["uploaded_at"] = datetime.now(UTC).isoformat()
     write_json_file(paths.queue_file, queue)
-    if not ok:
-        raise RuntimeError("Upload failed; see log.")
     Path(item["clip_path"]).unlink(missing_ok=True)  # YouTube has it now
     return item["youtube_url"]
 
 
 def _process_job(args: dict) -> str:
-    config = _config()
-    thumbnail = config.channel.thumbnail_template
-    if not thumbnail:
-        raise ValueError("Set thumbnail_template for this channel in config.toml.")
-    run = make_run(args["url"], paths, config, thumbnail)
+    run = make_run(args["url"], paths, _config())
     run_pipeline(run, paths)
     # The clips are cut and the transcript is cached; the source media is only
     # disk usage now (re-running the source downloads it again).
@@ -595,7 +547,8 @@ mcp = MCPServer(
     instructions=(
         f"Runs the '{CHANNEL}' YouTube clip channel: analytics and revenue, finding "
         "source videos, turning them into clips, editing and publishing them, and "
-        "editing existing videos. Long work runs as background jobs; poll `jobs`."
+        "editing existing videos. Long work runs as background jobs; follow them "
+        "with wait_for_job."
     ),
 )
 
@@ -686,11 +639,7 @@ async def process_source(url: str) -> dict:
     thumbnails, and add them to the queue as pending. Takes 20-90 minutes and
     costs API money (roughly $0.30/hour of audio plus LLM calls). Nothing is
     uploaded. Returns a job; follow it with wait_for_job."""
-    video_id = extract_video_id(url)
-    if video_id in await _sync(_processed_sources):
-        raise ValueError(f"{video_id} was already clipped for this channel.")
-    if jobs.active("process_source"):
-        raise ValueError("A source is already being processed; wait for it.")
+    extract_video_id(url)  # reject anything that is not a video URL
     return jobs.submit("process_source", {"url": url})
 
 
@@ -720,7 +669,7 @@ async def wait_for_job(job_id: str, max_minutes: int = 10) -> dict:
 async def list_queue(status: str = "pending") -> list[dict]:
     """Clips in the local queue with `status` pending, uploaded, failed,
     discarded, or all. Pending clips are ready to publish."""
-    items = [i for i in _queue() if i.get("clip_path")]
+    items = _queue()
     if status != "all":
         items = [i for i in items if i["status"] == status]
     return [_queue_view(i) for i in items]
@@ -769,7 +718,7 @@ def _edit_clip(
             thumbnail_prompt,
             Path(item["clip_path"]).parent,
             os.environ["OPENROUTER_API_KEY"],
-            paths.resolve_upload_thumbnail(config.channel.thumbnail_template),
+            paths.thumbnail_template(config.channel.thumbnail_template),
             config.channel,
             config.models.image,
             config.thumbnails,
@@ -813,22 +762,23 @@ async def discard_clip(clip_id: str, reason: str) -> dict:
 
 
 @tool(WRITE)
-async def publish_clip(clip_id: str, publish_at: str) -> dict:
-    """Upload a pending clip as a private video that YouTube publishes at
-    `publish_at` (ISO 8601, e.g. 2026-09-29T09:00:00Z). Only allowed in the
-    weekly batch on Monday (Australia/Sydney), 12 hours to 8 days ahead, and at
-    most one video going live per Sydney day. Several publishes can be queued
-    in one run; they upload one after another. Returns a job."""
-    when = _parse_time(publish_at).astimezone(UTC)
+async def publish_clip(clip_id: str, publish_at: str | None = None) -> dict:
+    """Upload a pending clip. With `publish_at` (ISO 8601, e.g.
+    2026-09-29T14:00:00Z) it goes up private and YouTube publishes it then;
+    without it, it goes public as soon as it uploads. Queued uploads run one
+    after another. Returns a job; follow it with wait_for_job."""
     item = _find_item(_queue(), clip_id)
     if item["status"] != "pending":
         raise ValueError(f"Clip is {item['status']}, not pending.")
     if any(j["args"]["item_id"] == clip_id for j in jobs.active("publish")):
         raise ValueError(f"{clip_id} is already queued for upload.")
-    await _sync(_check_schedule, when)
+    when = publish_at and _parse_time(publish_at).astimezone(UTC)
     return jobs.submit(
         "publish",
-        {"item_id": clip_id, "publish_at": when.strftime("%Y-%m-%dT%H:%M:%SZ")},
+        {
+            "item_id": clip_id,
+            "publish_at": when and when.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        },
     )
 
 
@@ -881,7 +831,7 @@ def _set_video_thumbnail(video_id: str, thumbnail_prompt: str) -> bytes:
         thumbnail_prompt,
         paths.work_root / "video-thumbnails" / video_id,
         os.environ["OPENROUTER_API_KEY"],
-        paths.resolve_upload_thumbnail(config.channel.thumbnail_template),
+        paths.thumbnail_template(config.channel.thumbnail_template),
         config.channel,
         config.models.image,
         config.thumbnails,

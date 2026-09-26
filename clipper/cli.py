@@ -18,7 +18,7 @@ from .paths import ClipperPaths
 from .queue import remove_work_dir_entries, save_queue
 from .thumbnails import generate_thumbnails
 from .transcription import build_sentence_transcript, transcribe_audio
-from .upload import authorize, upload_from_queue
+from .upload import authorize
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "url",
         nargs="?",
         default=None,
-        help="YouTube video URL, 'upload' to upload from queue, or 'auth' to authorize YouTube",
+        help="YouTube video URL to clip, or 'auth' to authorize YouTube",
     )
     parser.add_argument(
         "--step",
@@ -57,10 +57,6 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=range(1, 7),
         metavar="N",
         help="Force restart from step N (1=download, 2=transcribe, 3=extract clips, 4=cut clips, 5=generate thumbnails, 6=save queue)",
-    )
-    parser.add_argument(
-        "--thumbnail",
-        help="Thumbnail filename for URL runs; used as the template for generated clip thumbnails.",
     )
     parser.add_argument(
         "--channel",
@@ -99,17 +95,13 @@ def _require_env(parser: argparse.ArgumentParser, key: str) -> str:
 
 
 def make_run(
-    url: str,
-    paths: ClipperPaths,
-    config: AppConfig,
-    thumbnail: str,
-    force_step: int | None = None,
+    url: str, paths: ClipperPaths, config: AppConfig, force_step: int | None = None
 ) -> PipelineRun:
     """Build a pipeline run; raises KeyError/FileNotFoundError on missing inputs."""
     return PipelineRun(
         url=url,
         work_dir=paths.work_dir_for_url(url),
-        thumbnail_template=paths.resolve_upload_thumbnail(thumbnail),
+        thumbnail_template=paths.thumbnail_template(config.channel.thumbnail_template),
         config=config,
         assemblyai_key=os.environ["ASSEMBLYAI_API_KEY"],
         openrouter_key=os.environ["OPENROUTER_API_KEY"],
@@ -124,20 +116,11 @@ def _build_pipeline_run(
     config: AppConfig,
 ) -> PipelineRun:
     if args.url is None:
-        parser.error("URL is required (use 'upload' command to upload from queue)")
-
-    thumbnail = args.thumbnail or config.channel.thumbnail_template
-    if not thumbnail:
-        parser.error(
-            "--thumbnail is required for URL runs (filename in ./thumbnails or ./thumbnail)"
-        )
-    if Path(thumbnail).name != thumbnail:
-        parser.error("--thumbnail must be a filename only (no directory path)")
-
+        parser.error("URL is required")
     _require_env(parser, "ASSEMBLYAI_API_KEY")
     _require_env(parser, "OPENROUTER_API_KEY")
     try:
-        return make_run(args.url, paths, config, thumbnail, args.step)
+        return make_run(args.url, paths, config, args.step)
     except FileNotFoundError as exc:
         parser.error(str(exc))
 
@@ -241,17 +224,6 @@ def main() -> None:
 
     if args.url == "auth":
         authorize(paths.token_file, paths.project_root)
-        return
-
-    if args.url == "upload":
-        if args.thumbnail:
-            parser.error("--thumbnail is not used with 'upload'.")
-        upload_from_queue(
-            paths.queue_file,
-            config.channel.description_template,
-            config.youtube,
-            paths.project_root,
-        )
         return
 
     run = _build_pipeline_run(args, parser, paths, config)

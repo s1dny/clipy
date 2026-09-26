@@ -162,59 +162,6 @@ def render_thumbnail(
     return thumbnail
 
 
-def _generate_single_thumbnail(args: tuple) -> tuple[int, str | None]:
-    """Generate a single thumbnail (for use with ThreadPoolExecutor)."""
-    (
-        i,
-        clip,
-        clips_dir,
-        api_key,
-        template_path,
-        prompt_template,
-        center_x,
-        center_y,
-        image_model,
-        thumbnail_settings,
-    ) = args
-    folder = clips_dir / clip_folder_name(i, clip["title"])
-    folder.mkdir(exist_ok=True)
-    thumb_path = folder / "thumbnail.jpg"
-    generated_thumbnail_path = folder / "generated_thumbnail.png"
-
-    if thumb_path.exists() and generated_thumbnail_path.exists():
-        logger.info(
-            "Skipping clip %s: %s (thumbnail exists)",
-            i + 1,
-            clip["title"],
-            extra={"highlighter": None},
-        )
-        return i, str(thumb_path)
-
-    try:
-        if not generated_thumbnail_path.exists() and not generate_illustration(
-            thumbnail_prompt_text(clip),
-            generated_thumbnail_path,
-            api_key,
-            prompt_template,
-            image_model,
-        ):
-            return i, None
-
-        if composite_thumbnail(
-            generated_thumbnail_path,
-            thumb_path,
-            template_path,
-            center_x,
-            center_y,
-            thumbnail_settings.illustration_size,
-        ):
-            return i, str(thumb_path)
-        return i, None
-    except (KeyError, OSError, ValueError) as exc:
-        logger.error("Thumbnail generation failed for clip %s: %s", i + 1, exc)
-        return i, None
-
-
 def generate_thumbnails(
     clips: list[dict],
     work_dir: Path,
@@ -224,55 +171,34 @@ def generate_thumbnails(
     image_model: str,
     thumbnail_settings: ThumbnailConfig,
 ) -> list[dict]:
-    """Generate thumbnails for each clip in parallel. Detects prompt changes and missing thumbnails."""
+    """Draw each clip's thumbnail in parallel, reusing any drawn from the same
+    prompt before."""
     logger.info("[5/6] Generating thumbnails...")
 
-    clips_dir = work_dir / "clips"
-
-    # Detect prompt changes and delete stale thumbnails so they get regenerated
-    for i, clip in enumerate(clips):
-        folder = clips_dir / clip_folder_name(i, clip["title"])
-        if not folder.exists():
-            continue
+    def draw(i: int) -> str | None:
+        clip = clips[i]
+        folder = work_dir / "clips" / clip_folder_name(i, clip["title"])
+        prompt = thumbnail_prompt_text(clip)
+        thumbnail = folder / "thumbnail.jpg"
         prompt_file = folder / ".thumbnail_prompt"
-        current_prompt = thumbnail_prompt_text(clip)
-
         if (
-            prompt_file.exists()
-            and prompt_file.read_text(encoding="utf-8").strip() != current_prompt
+            thumbnail.exists()
+            and prompt_file.exists()
+            and prompt_file.read_text(encoding="utf-8").strip() == prompt
         ):
-            logger.info(
-                "Prompt changed for clip %s: %s",
-                i + 1,
-                clip["title"],
-                extra={"highlighter": None},
-            )
-            for stale_asset in (
-                folder / "thumbnail.jpg",
-                folder / "generated_thumbnail.png",
-            ):
-                if stale_asset.exists():
-                    stale_asset.unlink()
-        prompt_file.write_text(current_prompt, encoding="utf-8")
-
-    tasks = [
-        (
-            i,
-            clip,
-            clips_dir,
+            return str(thumbnail)
+        drawn = render_thumbnail(
+            prompt,
+            folder,
             api_key,
             template_path,
-            channel_config.illustration_prompt_template,
-            channel_config.illustration_center_x,
-            channel_config.illustration_center_y,
+            channel_config,
             image_model,
             thumbnail_settings,
         )
-        for i, clip in enumerate(clips)
-    ]
+        return str(drawn) if drawn else None
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-        for i, thumb_path in pool.map(_generate_single_thumbnail, tasks):
-            clips[i]["thumbnail_path"] = thumb_path
-
+        for i, path in enumerate(pool.map(draw, range(len(clips)))):
+            clips[i]["thumbnail_path"] = path
     return clips

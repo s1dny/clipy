@@ -35,10 +35,9 @@ falls back to `[defaults]`.
 
 1. Create a project in the [Google Cloud Console](https://console.cloud.google.com/)
 2. Enable the **YouTube Data API v3**
-3. Create OAuth 2.0 credentials (Desktop app) with the `youtube.upload` scope
+3. Create OAuth 2.0 credentials (Desktop app)
 4. Download the JSON and save it as `client_secrets.json` in the project root
-
-The first run of `upload` will open a browser for OAuth consent. The token is cached at `<work-dir>/.youtube_token.json` for subsequent runs.
+5. Run `clipper --channel <name> auth` (see below)
 
 ## Development
 
@@ -58,10 +57,11 @@ uv run ruff check .
 
 ### Full pipeline
 
-`--channel <name>` is required and writes to `./channels/<name>`.
+`--channel <name>` is required and writes to `./channels/<name>`. Thumbnails
+are drawn onto the channel's `thumbnail_template` from `./thumbnails`.
 
 ```bash
-clipper --channel philosophy --thumbnail peterson.jpg <youtube-url>
+clipper --channel philosophy <youtube-url>
 ```
 
 This runs all 6 steps:
@@ -74,16 +74,6 @@ This runs all 6 steps:
 6. Save to channel upload queue
 
 Results are cached per step, so re-running the same URL resumes from where it left off. Changes to `clips.json` (titles, thumbnail prompts) and missing thumbnails are detected automatically on re-run.
-
-### Upload to YouTube
-
-For a specific channel directory:
-
-```bash
-clipper --channel philosophy upload
-```
-
-Uploads all pending clips from the selected channel queue (`channels/<channel>/upload_queue.json`) to YouTube as private, scheduled to publish one per day. Dates are assigned in random order on first run. Each queue item must have a valid `thumbnail_path`.
 
 ### Authorize YouTube
 
@@ -104,10 +94,8 @@ Streamable HTTP at `/mcp/$CLIPPER_MCP_SECRET` for an agent to run the channel:
 analytics and revenue (with API spend from `costs.jsonl`, so profit), source
 discovery, clipping sources as background jobs, editing and publishing clips,
 editing live videos and thumbnails, prompt overrides, and a strategy notebook.
-Uploads go up only in a weekly batch (`CLIPPER_BATCH_WEEKDAY`, default Monday),
-as private videos scheduled 12 hours to 8 days ahead so monetization can be
-switched on in Studio first, with at most one going live per day
-(`CLIPPER_TIMEZONE`, default Australia/Sydney).
+It is mechanism only: when to publish and what to clip is up to the agent's
+prompt ([`agent/prompt.md`](agent/prompt.md)).
 
 | Variable | Meaning |
 |---|---|
@@ -127,7 +115,6 @@ Production runs on azalab-0 from `ghcr.io/s1dny/clipper`; see
 |---|---|
 | `--step N` | Force re-run from step N (1-6), e.g. `--step 5` to regenerate all thumbnails |
 | `--channel NAME` | Required. Uses `./channels/NAME` as the work directory |
-| `--thumbnail FILE` | Required for URL runs unless the channel sets `thumbnail_template`. Resolved from `./thumbnails/FILE` or `./thumbnail/FILE`, and used as the template for each generated clip thumbnail. |
 
 ## Project structure
 
@@ -147,8 +134,8 @@ clipper/
     clips.py           # LLM clip extraction + ffmpeg clip cutting
     thumbnails.py      # Illustration + thumbnail generation/compositing
     paths.py           # Centralized path helpers for workspace artifacts
-    queue.py           # Upload queue persistence + thumbnail path resolution
-    upload.py          # YouTube auth, upload flow and scheduling
+    queue.py           # Clip queue persistence
+    upload.py          # YouTube auth and uploading
     mcp_server.py      # MCP server an agent uses to run a channel
     jobs.py            # Background job runner for the MCP server
     costs.py           # API spend ledger
@@ -156,11 +143,11 @@ clipper/
   client_secrets.json  # YouTube OAuth credentials (not committed)
   tests/               # End-to-end tests against the running MCP server
   thumbnails/
-    <template>.jpg     # Thumbnail templates passed via --thumbnail
+    <template>.jpg     # Thumbnail templates named by thumbnail_template
   channels/
     <channel>/
       upload_queue.json   # Channel upload queue
-      .youtube_token.json # OAuth token cache (created after first upload)
+      .youtube_token.json # OAuth token cache (created by auth)
       <video-id>/
         video.mp4
         audio.mp3

@@ -11,18 +11,14 @@ import socket
 import subprocess
 import sys
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import pytest
 import requests
 from mcp import Client
 
 SECRET = "s" * 40
-NOT_TODAY = (datetime.now(ZoneInfo("Australia/Sydney")) + timedelta(days=3)).strftime(
-    "%A"
-)
 ROOT = Path(__file__).resolve().parent.parent
 
 CONFIG = """
@@ -92,8 +88,6 @@ def server(tmp_path_factory):
         "ASSEMBLYAI_API_KEY": "unused",
         "PORT": str(port),
         "HOST": "127.0.0.1",
-        # Any day but today, so uploads are out of the batch window.
-        "CLIPPER_BATCH_WEEKDAY": NOT_TODAY,
     }
     proc = subprocess.Popen(
         [sys.executable, "-m", "clipper.mcp_server"],
@@ -183,21 +177,11 @@ def test_pending_clips_can_be_edited_and_discarded(server):
     assert thumbnail.content[0].type == "image"
 
 
-def test_uploads_only_happen_in_the_weekly_batch(server):
+def test_a_clip_cannot_be_published_twice(server):
     base, _ = server
-    tomorrow = (datetime.now(UTC) + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    result = call(
-        base, "publish_clip", {"clip_id": "aaaaaaaaaaa:02", "publish_at": tomorrow}
-    )
+    result = call(base, "publish_clip", {"clip_id": "aaaaaaaaaaa:01"})
     assert result.is_error
-    assert f"only in the weekly batch on {NOT_TODAY}" in text(result)
-    assert data(call(base, "list_jobs")) == []
-
-
-def test_uploads_must_be_scheduled(server):
-    base, _ = server
-    result = call(base, "publish_clip", {"clip_id": "aaaaaaaaaaa:02"})
-    assert result.is_error
+    assert "Clip is uploaded, not pending" in text(result)
     assert data(call(base, "list_jobs")) == []
 
 

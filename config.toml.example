@@ -12,7 +12,6 @@ assemblyai_usd_per_hour = 0.27
 illustration_size = [700, 700]
 
 [youtube]
-publish_hour_utc = 12
 category_id = "22"
 
 [defaults]
@@ -47,7 +46,7 @@ illustration_center_x = 850
 illustration_center_y = 350
 
 [channels.example]
-# Template in ./thumbnails used when no --thumbnail is given (and by the MCP server).
+# Thumbnail template in ./thumbnails that clip illustrations are drawn onto.
 thumbnail_template = "example.jpg"
 description_template = """
 {clip_description}
