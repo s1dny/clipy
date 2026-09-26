@@ -49,6 +49,9 @@ def download_video(
 
     # Extract audio with ffmpeg
     audio_path = work_dir / "audio.mp3"
+    # Written beside the target and renamed, so a resumed run never mistakes
+    # a half-written file for finished audio.
+    partial_audio = work_dir / "audio.partial.mp3"
     code, _out, err = run_cmd(
         [
             ffmpeg_path,
@@ -60,12 +63,13 @@ def download_video(
             "libmp3lame",
             "-q:a",
             "2",
-            str(audio_path),
+            str(partial_audio),
         ]
     )
     if code != 0:
         logger.error("Error extracting audio: %s", err)
         raise MediaCommandError(f"ffmpeg audio extraction failed: {err}")
+    partial_audio.replace(audio_path)
 
     logger.info("Video: %s", video_path)
     logger.info("Audio: %s", audio_path)

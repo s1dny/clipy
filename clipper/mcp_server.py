@@ -160,7 +160,8 @@ def _channel_videos(refresh: bool = False) -> list[dict]:
 
 
 def _processed_sources() -> set[str]:
-    """Source video ids already clipped: local work dirs plus 'Original:' links."""
+    """Source ids to skip: local work dirs, the queue, the channel's own
+    uploads, and the 'Original:' link in each upload's description."""
     seen = (
         {p.name for p in paths.work_root.iterdir() if p.is_dir() and len(p.name) == 11}
         if paths.work_root.exists()
@@ -172,6 +173,8 @@ def _processed_sources() -> set[str]:
             seen.add(parts[parts.index("clips") - 1])
     try:
         for video in _channel_videos():
+            # Our own uploads show up in searches too; never re-clip a clip.
+            seen.add(video["id"])
             seen.update(VIDEO_ID_RE.findall(video["description"]))
     except Exception as exc:  # noqa: BLE001 - dedupe still works from local state
         logger.warning("Could not read channel descriptions: %s", exc)

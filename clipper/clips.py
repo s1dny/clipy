@@ -87,6 +87,9 @@ def cut_clip(
     """Cut and re-encode a clip to high-quality 1080p H.264."""
     start_sec = start_ms / 1000
     duration_sec = (end_ms - start_ms) / 1000
+    # Encode beside the target and rename on success: a resumed job treats an
+    # existing video.mp4 as cut, so it must never be a half-written file.
+    partial = output_path.with_name(f"{output_path.stem}.partial{output_path.suffix}")
 
     common = [
         ffmpeg_path,
@@ -131,10 +134,11 @@ def cut_clip(
                 "1",
                 "-realtime",
                 "0",
-                str(output_path),
+                str(partial),
             ]
         )
         if code == 0:
+            partial.replace(output_path)
             return True
         logger.warning("VideoToolbox encode failed, falling back to libx264.")
 
@@ -153,13 +157,15 @@ def cut_clip(
             "high",
             "-level:v",
             "4.1",
-            str(output_path),
+            str(partial),
         ]
     )
 
     if code != 0:
         logger.error("FFmpeg error: %s", err)
+        partial.unlink(missing_ok=True)
         return False
+    partial.replace(output_path)
     return True
 
 
