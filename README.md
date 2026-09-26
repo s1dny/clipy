@@ -104,7 +104,9 @@ Streamable HTTP at `/mcp/$CLIPPER_MCP_SECRET` for an agent to run the channel:
 analytics and revenue (with API spend from `costs.jsonl`, so profit), source
 discovery, clipping sources as background jobs, editing and publishing clips,
 editing live videos and thumbnails, prompt overrides, and a strategy notebook.
-It refuses a second upload in one day, or a second video going live on one day
+Uploads go up only in a weekly batch (`CLIPPER_BATCH_WEEKDAY`, default Monday),
+as private videos scheduled 12 hours to 8 days ahead so monetization can be
+switched on in Studio first, with at most one going live per day
 (`CLIPPER_TIMEZONE`, default Australia/Sydney).
 
 | Variable | Meaning |

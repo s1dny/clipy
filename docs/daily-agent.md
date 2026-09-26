@@ -1,9 +1,16 @@
 # Daily channel agent
 
-Every day at 4:00 AM Sydney time, the `clipper-agent` CronJob on azalab-0 runs
+Every day at 00:00 UTC, the `clipper-agent` CronJob on azalab-0 runs
 [`agent/run.sh`](../agent/run.sh): Codex CLI (`codex exec`), signed in with a
 ChatGPT subscription rather than an API key, follows
 [`agent/prompt.md`](../agent/prompt.md) using the clipper MCP server's tools.
+
+Uploads happen in a weekly batch on Mondays (Sydney time): the agent schedules
+one private video for each of the next 7 days. The YouTube API cannot turn on
+monetization, so each Monday, switch it on for the scheduled videos in YouTube
+Studio (Content, select them, Edit, Monetization: On) before Tuesday's goes
+live. On other days the agent reviews performance, retitles and re-thumbnails
+videos, and processes sources so the next batch has clips.
 
 - The MCP server is reached in-cluster at
   `http://clipper.clipper.svc:8000/mcp/$CLIPPER_MCP_SECRET`, and its tools are
@@ -43,9 +50,10 @@ Logs are in `kubectl -n clipper logs job/<name>`, past run summaries in
 
 ## What the server enforces regardless of the prompt
 
-- `publish_clip` refuses if anything was uploaded earlier the same Sydney day,
-  if a publish job is already queued, or if another channel video goes live on
-  the same Sydney day.
+- `publish_clip` only uploads on the batch weekday (`CLIPPER_BATCH_WEEKDAY`,
+  default Monday, in `CLIPPER_TIMEZONE`, default Australia/Sydney), only as a
+  scheduled private video 12 hours to 8 days ahead, and refuses a second video
+  going live on any Sydney day (channel videos and queued uploads alike).
 - `process_source` refuses sources already clipped (local work directories,
   queue, and every `Original:` link in the channel's descriptions) and runs
   one source at a time.

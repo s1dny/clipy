@@ -49,6 +49,11 @@ logger = logging.getLogger(__name__)
 
 CHANNEL = os.environ.get("CLIPPER_CHANNEL", "blow")
 LOCAL_TZ = ZoneInfo(os.environ.get("CLIPPER_TIMEZONE", "Australia/Sydney"))
+# Uploads go up once a week as scheduled private videos, because the API cannot
+# turn on monetization: Aiden switches it on for the whole batch in Studio.
+BATCH_WEEKDAY = os.environ.get("CLIPPER_BATCH_WEEKDAY", "Monday")
+MIN_LEAD = timedelta(hours=12)
+MAX_AHEAD = timedelta(days=8)
 VIDEO_ID_RE = re.compile(r"(?:youtube\.com/watch\?v=|youtu\.be/)([\w-]{11})")
 DURATION_RE = re.compile(r"P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?")
 CHANNEL_CACHE_SECONDS = 600
@@ -503,24 +508,35 @@ def _queue_view(item: dict) -> dict:
     }
 
 
-def _check_daily_limit(publish_at: datetime) -> None:
-    """At most one upload per local day, and at most one video going live per day."""
-    today = _local_day(datetime.now(UTC))
-    for item in _queue():
-        uploaded = item.get("uploaded_at")
-        if uploaded and _local_day(_parse_time(uploaded)) == today:
-            raise ValueError(
-                f"Already uploaded {item['title']!r} today ({today}, {LOCAL_TZ.key}). "
-                "One upload per day."
-            )
-    if jobs.active("publish"):
-        raise ValueError("A publish job is already queued or running.")
+def _check_schedule(publish_at: datetime) -> None:
+    """Uploads only on the batch weekday, each at least MIN_LEAD ahead (time to
+    turn on monetization), and at most one video going live per local day."""
+    now = datetime.now(UTC)
+    today = now.astimezone(LOCAL_TZ)
+    if today.strftime("%A") != BATCH_WEEKDAY:
+        raise ValueError(
+            f"Uploads happen only in the weekly batch on {BATCH_WEEKDAY} "
+            f"({LOCAL_TZ.key}); today is {today:%A}. Nothing was uploaded."
+        )
+    if publish_at < now + MIN_LEAD:
+        raise ValueError(
+            "publish_at must be at least 12 hours ahead, so monetization can be "
+            "switched on in Studio before the video goes live."
+        )
+    if publish_at > now + MAX_AHEAD:
+        raise ValueError("publish_at must be within the next 8 days.")
     publish_day = _local_day(publish_at)
+    for job in jobs.active("publish"):
+        queued = job["args"].get("publish_at")
+        if queued and _local_day(_parse_time(queued)) == publish_day:
+            raise ValueError(
+                f"A queued upload already goes live on {publish_day} ({LOCAL_TZ.key})."
+            )
     for video in _channel_videos(refresh=True):
         if _local_day(_parse_time(video["publish_time"])) == publish_day:
             raise ValueError(
                 f"{video['title']!r} already goes live on {publish_day} "
-                f"({LOCAL_TZ.key}). Pick another day or skip today."
+                f"({LOCAL_TZ.key}). One video per day; pick another day."
             )
 
 
@@ -797,27 +813,22 @@ async def discard_clip(clip_id: str, reason: str) -> dict:
 
 
 @tool(WRITE)
-async def publish_clip(clip_id: str, publish_at: str | None = None) -> dict:
-    """Upload a pending clip to the channel. Without `publish_at` it goes public
-    as soon as it uploads; with an ISO 8601 time (e.g. 2026-09-27T14:00:00Z, at
-    least 20 minutes ahead) it uploads now as private and YouTube publishes it
-    then. Refused if anything was already uploaded today or if another video
-    already goes live that day (days in Australia/Sydney time). Returns a job."""
-    when = datetime.now(UTC)
-    if publish_at:
-        when = _parse_time(publish_at).astimezone(UTC)
-        if when < datetime.now(UTC) + timedelta(minutes=20):
-            raise ValueError("publish_at must be at least 20 minutes in the future.")
+async def publish_clip(clip_id: str, publish_at: str) -> dict:
+    """Upload a pending clip as a private video that YouTube publishes at
+    `publish_at` (ISO 8601, e.g. 2026-09-29T09:00:00Z). Only allowed in the
+    weekly batch on Monday (Australia/Sydney), 12 hours to 8 days ahead, and at
+    most one video going live per Sydney day. Several publishes can be queued
+    in one run; they upload one after another. Returns a job."""
+    when = _parse_time(publish_at).astimezone(UTC)
     item = _find_item(_queue(), clip_id)
     if item["status"] != "pending":
         raise ValueError(f"Clip is {item['status']}, not pending.")
-    await _sync(_check_daily_limit, when)
+    if any(j["args"]["item_id"] == clip_id for j in jobs.active("publish")):
+        raise ValueError(f"{clip_id} is already queued for upload.")
+    await _sync(_check_schedule, when)
     return jobs.submit(
         "publish",
-        {
-            "item_id": clip_id,
-            "publish_at": when.strftime("%Y-%m-%dT%H:%M:%SZ") if publish_at else None,
-        },
+        {"item_id": clip_id, "publish_at": when.strftime("%Y-%m-%dT%H:%M:%SZ")},
     )
 
 
