@@ -8,6 +8,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from . import costs
 from .clips import cut_clips, extract_clips
 from .common import load_or_compute
 from .config import AppConfig, load_config
@@ -17,7 +18,7 @@ from .paths import ClipperPaths
 from .queue import remove_work_dir_entries, save_queue
 from .thumbnails import generate_thumbnails
 from .transcription import build_sentence_transcript, transcribe_audio
-from .upload import upload_from_queue
+from .upload import authorize, upload_from_queue
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "url",
         nargs="?",
         default=None,
-        help="YouTube video URL, or 'upload' to upload from queue",
+        help="YouTube video URL, 'upload' to upload from queue, or 'auth' to authorize YouTube",
     )
     parser.add_argument(
         "--step",
@@ -75,10 +76,19 @@ def _validate_channel(parser: argparse.ArgumentParser, channel: str) -> str:
     return channel
 
 
-def _build_paths(channel: str) -> ClipperPaths:
+def build_paths(channel: str) -> ClipperPaths:
+    """Channel state lives under $CLIPPER_DATA_DIR/channels, defaulting to the repo."""
     project_root = Path(__file__).resolve().parent.parent
-    work_root = project_root / "channels" / channel
+    data_root = Path(os.environ.get("CLIPPER_DATA_DIR") or project_root)
+    work_root = data_root / "channels" / channel
     return ClipperPaths(project_root=project_root, work_root=work_root)
+
+
+def load_app_config(paths: ClipperPaths, channel: str) -> AppConfig:
+    config_path = Path(
+        os.environ.get("CLIPPER_CONFIG") or paths.project_root / "config.toml"
+    )
+    return load_config(config_path, channel, paths.prompt_overrides_file)
 
 
 def _require_env(parser: argparse.ArgumentParser, key: str) -> str:
@@ -86,6 +96,25 @@ def _require_env(parser: argparse.ArgumentParser, key: str) -> str:
     if not value:
         parser.error(f"{key} environment variable not set")
     return value
+
+
+def make_run(
+    url: str,
+    paths: ClipperPaths,
+    config: AppConfig,
+    thumbnail: str,
+    force_step: int | None = None,
+) -> PipelineRun:
+    """Build a pipeline run; raises KeyError/FileNotFoundError on missing inputs."""
+    return PipelineRun(
+        url=url,
+        work_dir=paths.work_dir_for_url(url),
+        thumbnail_template=paths.resolve_upload_thumbnail(thumbnail),
+        config=config,
+        assemblyai_key=os.environ["ASSEMBLYAI_API_KEY"],
+        openrouter_key=os.environ["OPENROUTER_API_KEY"],
+        force_step=force_step,
+    )
 
 
 def _build_pipeline_run(
@@ -97,27 +126,20 @@ def _build_pipeline_run(
     if args.url is None:
         parser.error("URL is required (use 'upload' command to upload from queue)")
 
-    if not args.thumbnail:
+    thumbnail = args.thumbnail or config.channel.thumbnail_template
+    if not thumbnail:
         parser.error(
             "--thumbnail is required for URL runs (filename in ./thumbnails or ./thumbnail)"
         )
-    if Path(args.thumbnail).name != args.thumbnail:
+    if Path(thumbnail).name != thumbnail:
         parser.error("--thumbnail must be a filename only (no directory path)")
 
+    _require_env(parser, "ASSEMBLYAI_API_KEY")
+    _require_env(parser, "OPENROUTER_API_KEY")
     try:
-        thumbnail_template = paths.resolve_upload_thumbnail(args.thumbnail)
+        return make_run(args.url, paths, config, thumbnail, args.step)
     except FileNotFoundError as exc:
         parser.error(str(exc))
-
-    return PipelineRun(
-        url=args.url,
-        work_dir=paths.work_dir_for_url(args.url),
-        thumbnail_template=thumbnail_template,
-        config=config,
-        assemblyai_key=_require_env(parser, "ASSEMBLYAI_API_KEY"),
-        openrouter_key=_require_env(parser, "OPENROUTER_API_KEY"),
-        force_step=args.step,
-    )
 
 
 def _force_rerun_from_step(run: PipelineRun, paths: ClipperPaths) -> None:
@@ -155,7 +177,7 @@ def _maybe_download(run: PipelineRun) -> tuple[Path, Path]:
     return download_video(run.url, run.work_dir, run.config.runtime.ffmpeg_path)
 
 
-def _run_pipeline(run: PipelineRun, paths: ClipperPaths) -> None:
+def run_pipeline(run: PipelineRun, paths: ClipperPaths) -> None:
     logger.info("URL: %s", run.url)
     logger.info("Work dir: %s", run.work_dir)
 
@@ -172,6 +194,7 @@ def _run_pipeline(run: PipelineRun, paths: ClipperPaths) -> None:
         audio_path,
         run.assemblyai_key,
         run.config.models.speech,
+        run.config.models.assemblyai_usd_per_hour,
         skip_message="[2/6] Transcribing audio with AssemblyAI... skipped: transcript already exists",
     )
     sentences = load_or_compute(
@@ -207,13 +230,18 @@ def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
     channel = _validate_channel(parser, args.channel)
-    paths = _build_paths(channel)
+    paths = build_paths(channel)
     load_dotenv(paths.project_root / ".env")
     try:
-        config = load_config(paths.project_root, channel)
+        config = load_app_config(paths, channel)
     except ValueError as exc:
         parser.error(str(exc))
     setup_logging()
+    costs.configure(paths.costs_file)
+
+    if args.url == "auth":
+        authorize(paths.token_file, paths.project_root)
+        return
 
     if args.url == "upload":
         if args.thumbnail:
@@ -228,7 +256,7 @@ def main() -> None:
 
     run = _build_pipeline_run(args, parser, paths, config)
     try:
-        _run_pipeline(run, paths)
+        run_pipeline(run, paths)
     except Exception:
         logger.exception("Pipeline failed")
         logger.info("Re-run with the same URL to resume from the last successful step.")

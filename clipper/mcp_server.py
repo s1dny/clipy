@@ -1,0 +1,884 @@
+"""MCP server that lets a scheduled agent run one clip channel end to end.
+
+Everything slow (downloading, transcribing, cutting, uploading) runs as a
+background job so a tool call returns in seconds; the agent polls `jobs`.
+The one-upload-per-day rule is enforced here, not left to the prompt.
+"""
+
+import functools
+import logging
+import os
+import re
+import time
+from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlencode
+from zoneinfo import ZoneInfo
+
+import anyio
+import requests
+import uvicorn
+import yt_dlp
+from dotenv import load_dotenv
+from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
+from mcp.server.mcpserver.utilities.types import Image
+from mcp.server.transport_security import TransportSecuritySettings
+from mcp.types import ToolAnnotations
+from starlette.requests import Request
+from starlette.responses import PlainTextResponse
+from starlette.routing import Route
+
+from . import costs
+from .cli import build_paths, load_app_config, make_run, run_pipeline
+from .common import extract_video_id, read_json_file, write_json_file
+from .config import PROMPT_KEYS, AppConfig
+from .jobs import JobRunner
+from .logging_config import setup_logging
+from .queue import item_id, load_queue
+from .thumbnails import render_thumbnail
+from .upload import get_analytics_service, get_youtube_service, upload_single_video
+
+logger = logging.getLogger(__name__)
+
+CHANNEL = os.environ.get("CLIPPER_CHANNEL", "blow")
+LOCAL_TZ = ZoneInfo(os.environ.get("CLIPPER_TIMEZONE", "Australia/Sydney"))
+VIDEO_ID_RE = re.compile(r"(?:youtube\.com/watch\?v=|youtu\.be/)([\w-]{11})")
+DURATION_RE = re.compile(r"P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?")
+CHANNEL_CACHE_SECONDS = 600
+
+READ = ToolAnnotations(readOnlyHint=True, openWorldHint=True)
+WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=True)
+LOCAL_WRITE = ToolAnnotations(
+    readOnlyHint=False, destructiveHint=False, openWorldHint=False
+)
+
+paths = build_paths(CHANNEL)
+_channel_cache: tuple[float, list[dict]] | None = None
+
+
+def _config() -> AppConfig:
+    return load_app_config(paths, CHANNEL)
+
+
+def _token() -> Path:
+    return paths.token_file
+
+
+async def _sync(fn, *args, **kwargs):
+    return await anyio.to_thread.run_sync(functools.partial(fn, *args, **kwargs))
+
+
+def _seconds(iso_duration: str) -> int:
+    match = DURATION_RE.fullmatch(iso_duration or "")
+    if not match:
+        return 0
+    d, h, m, s = (int(g or 0) for g in match.groups())
+    return ((d * 24 + h) * 60 + m) * 60 + s
+
+
+def _parse_time(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _local_day(moment: datetime) -> date:
+    return moment.astimezone(LOCAL_TZ).date()
+
+
+# --- channel data -----------------------------------------------------------
+
+
+def _channel_videos(refresh: bool = False) -> list[dict]:
+    """Every upload on the channel, including private and scheduled ones."""
+    global _channel_cache
+    if (
+        not refresh
+        and _channel_cache
+        and time.monotonic() - _channel_cache[0] < CHANNEL_CACHE_SECONDS
+    ):
+        return _channel_cache[1]
+
+    youtube = get_youtube_service(_token())
+    channel = youtube.channels().list(part="contentDetails", mine=True).execute()
+    uploads = channel["items"][0]["contentDetails"]["relatedPlaylists"]["uploads"]
+
+    ids: list[str] = []
+    page_token = None
+    while True:
+        page = (
+            youtube.playlistItems()
+            .list(
+                part="contentDetails",
+                playlistId=uploads,
+                maxResults=50,
+                pageToken=page_token,
+            )
+            .execute()
+        )
+        ids += [i["contentDetails"]["videoId"] for i in page["items"]]
+        page_token = page.get("nextPageToken")
+        if not page_token:
+            break
+
+    videos = []
+    for start in range(0, len(ids), 50):
+        batch = (
+            youtube.videos()
+            .list(
+                part="snippet,statistics,contentDetails,status",
+                id=",".join(ids[start : start + 50]),
+            )
+            .execute()
+        )
+        for v in batch["items"]:
+            status = v["status"]
+            stats = v.get("statistics", {})
+            publish = status.get("publishAt") or v["snippet"]["publishedAt"]
+            videos.append(
+                {
+                    "id": v["id"],
+                    "title": v["snippet"]["title"],
+                    "description": v["snippet"].get("description", ""),
+                    "tags": v["snippet"].get("tags", []),
+                    "privacy": status["privacyStatus"],
+                    "publish_time": publish,
+                    "duration_seconds": _seconds(v["contentDetails"]["duration"]),
+                    "views": int(stats.get("viewCount", 0)),
+                    "likes": int(stats.get("likeCount", 0)),
+                    "comments": int(stats.get("commentCount", 0)),
+                }
+            )
+    videos.sort(key=lambda v: v["publish_time"], reverse=True)
+    _channel_cache = (time.monotonic(), videos)
+    return videos
+
+
+def _processed_sources() -> set[str]:
+    """Source video ids already clipped: local work dirs plus 'Original:' links."""
+    seen = (
+        {p.name for p in paths.work_root.iterdir() if p.is_dir() and len(p.name) == 11}
+        if paths.work_root.exists()
+        else set()
+    )
+    for item in load_queue(paths.queue_file):
+        parts = Path(item.get("clip_path", "")).parts
+        if "clips" in parts:
+            seen.add(parts[parts.index("clips") - 1])
+    try:
+        for video in _channel_videos():
+            seen.update(VIDEO_ID_RE.findall(video["description"]))
+    except Exception as exc:  # noqa: BLE001 - dedupe still works from local state
+        logger.warning("Could not read channel descriptions: %s", exc)
+    return seen
+
+
+def _analytics(**query: Any) -> list[dict]:
+    response = (
+        get_analytics_service(_token())
+        .reports()
+        .query(ids="channel==MINE", currency="USD", **query)
+        .execute()
+    )
+    names = [h["name"] for h in response.get("columnHeaders", [])]
+    return [dict(zip(names, row, strict=True)) for row in response.get("rows", [])]
+
+
+def _spend_since(start: date) -> float:
+    return sum(
+        entry["usd"]
+        for entry in costs.load(paths.costs_file)
+        if _parse_time(entry["at"]).date() >= start
+    )
+
+
+def _channel_report(days: int) -> dict:
+    end = datetime.now(UTC).date()
+    start = end - timedelta(days=days)
+    window = {"startDate": start.isoformat(), "endDate": end.isoformat()}
+    daily = _analytics(
+        metrics="views,estimatedMinutesWatched,subscribersGained,estimatedRevenue",
+        dimensions="day",
+        sort="day",
+        **window,
+    )
+    per_video = _analytics(
+        metrics=(
+            "views,estimatedMinutesWatched,averageViewDuration,"
+            "averageViewPercentage,subscribersGained,estimatedRevenue"
+        ),
+        dimensions="video",
+        sort="-estimatedRevenue",
+        maxResults=200,
+        **window,
+    )
+    by_id = {v["id"]: v for v in _channel_videos(refresh=True)}
+    videos = []
+    for row in per_video:
+        meta = by_id.get(row["video"], {})
+        videos.append(
+            {
+                "id": row["video"],
+                "title": meta.get("title"),
+                "published": meta.get("publish_time"),
+                "duration_minutes": round(meta.get("duration_seconds", 0) / 60, 1),
+                "lifetime_views": meta.get("views"),
+                "views": row["views"],
+                "revenue_usd": round(row["estimatedRevenue"], 2),
+                "rpm_usd": round(row["estimatedRevenue"] / row["views"] * 1000, 2)
+                if row["views"]
+                else 0,
+                "avg_view_seconds": row["averageViewDuration"],
+                "avg_view_percent": round(row["averageViewPercentage"], 1),
+                "subscribers_gained": row["subscribersGained"],
+            }
+        )
+    revenue = sum(d["estimatedRevenue"] for d in daily)
+    spend = _spend_since(start)
+    return {
+        "window": window,
+        "note": "Revenue lags 2-3 days; the last days of the window read low.",
+        "totals": {
+            "views": sum(d["views"] for d in daily),
+            "watch_hours": round(sum(d["estimatedMinutesWatched"] for d in daily) / 60),
+            "subscribers_gained": sum(d["subscribersGained"] for d in daily),
+            "revenue_usd": round(revenue, 2),
+            "api_spend_usd": round(spend, 2),
+            "profit_usd": round(revenue - spend, 2),
+        },
+        "daily": [
+            {
+                "day": d["day"],
+                "views": d["views"],
+                "revenue_usd": round(d["estimatedRevenue"], 2),
+            }
+            for d in daily
+        ],
+        "videos": videos,
+    }
+
+
+def _video_report(video_id: str, days: int) -> dict:
+    end = datetime.now(UTC).date()
+    window = {
+        "startDate": (end - timedelta(days=days)).isoformat(),
+        "endDate": end.isoformat(),
+        "filters": f"video=={video_id}",
+    }
+    retention = _analytics(
+        metrics="audienceWatchRatio,relativeRetentionPerformance",
+        dimensions="elapsedVideoTimeRatio",
+        **window,
+    )
+    traffic = _analytics(
+        metrics="views,estimatedMinutesWatched",
+        dimensions="insightTrafficSourceType",
+        sort="-views",
+        **window,
+    )
+    report: dict[str, Any] = {
+        "video": next((v for v in _channel_videos() if v["id"] == video_id), None),
+        "retention": [
+            {
+                "at_percent": round(r["elapsedVideoTimeRatio"] * 100),
+                "still_watching": round(r["audienceWatchRatio"], 3),
+                "vs_similar_videos": round(r["relativeRetentionPerformance"], 3),
+            }
+            for r in retention
+            if round(r["elapsedVideoTimeRatio"] * 100) % 10 == 0
+        ],
+        "traffic_sources": traffic,
+    }
+    try:
+        report["impressions"] = _analytics(
+            metrics="videoThumbnailImpressions,videoThumbnailImpressionsClickRate",
+            **window,
+        )
+    except Exception as exc:  # noqa: BLE001 - optional metric, older API versions lack it
+        report["impressions"] = f"unavailable: {exc}"
+    return report
+
+
+# --- source discovery -------------------------------------------------------
+
+
+def _ydl(**options: Any) -> yt_dlp.YoutubeDL:
+    return yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, **options})
+
+
+def _find_sources(
+    query: str | None, channel_url: str | None, limit: int, newest: bool
+) -> list:
+    if not query and not channel_url:
+        raise ValueError("Pass a search query or a channel/playlist URL.")
+    target = channel_url or (
+        "https://www.youtube.com/results?"
+        + urlencode({"search_query": query} | ({"sp": "CAI="} if newest else {}))
+    )
+    with _ydl(extract_flat="in_playlist", playlistend=limit) as ydl:
+        info = ydl.extract_info(target, download=False)
+    done = _processed_sources()
+    return [
+        {
+            "url": f"https://www.youtube.com/watch?v={e['id']}",
+            "title": e.get("title"),
+            "channel": e.get("channel") or e.get("uploader") or info.get("channel"),
+            "duration_minutes": round((e.get("duration") or 0) / 60),
+            "views": e.get("view_count"),
+            "uploaded": e.get("upload_date") or e.get("timestamp"),
+            "already_clipped": e["id"] in done,
+        }
+        for e in (info.get("entries") or [])
+        if e and e.get("ie_key") == "Youtube"
+    ][:limit]
+
+
+def _caption_text(info: dict, limit: int) -> str:
+    tracks = info.get("subtitles", {}).get("en") or info.get(
+        "automatic_captions", {}
+    ).get("en")
+    if not tracks:
+        return ""
+    track = next((t for t in tracks if t.get("ext") == "json3"), None)
+    if not track:
+        return ""
+    events = requests.get(track["url"], timeout=30).json().get("events", [])
+    text = " ".join(
+        seg.get("utf8", "").strip() for ev in events for seg in ev.get("segs", [])
+    )
+    return re.sub(r"\s+", " ", text)[:limit]
+
+
+def _source_info(url: str, transcript_chars: int) -> dict:
+    with _ydl() as ydl:
+        info = ydl.extract_info(url, download=False)
+    return {
+        "url": url,
+        "title": info.get("title"),
+        "channel": info.get("channel"),
+        "uploaded": info.get("upload_date"),
+        "duration_minutes": round((info.get("duration") or 0) / 60),
+        "views": info.get("view_count"),
+        "description": (info.get("description") or "")[:3000],
+        "chapters": [
+            {"start_minute": round(c["start_time"] / 60), "title": c["title"]}
+            for c in info.get("chapters") or []
+        ],
+        "already_clipped": info["id"] in _processed_sources(),
+        "transcript_preview": _caption_text(info, transcript_chars),
+    }
+
+
+# --- queue ------------------------------------------------------------------
+
+
+def _queue() -> list[dict]:
+    return load_queue(paths.queue_file)
+
+
+def _find_item(queue: list[dict], wanted: str) -> dict:
+    for item in queue:
+        if item.get("clip_path") and item_id(item) == wanted:
+            return item
+    raise ValueError(f"No queued clip with id {wanted!r}; call list_queue.")
+
+
+def _queue_view(item: dict) -> dict:
+    return {
+        "id": item_id(item),
+        "status": item["status"],
+        "title": item["title"],
+        "description": item.get("description"),
+        "tags": item.get("tags", []),
+        "duration_minutes": round(item.get("duration_seconds", 0) / 60, 1) or None,
+        "predicted_score": item.get("score"),
+        "thumbnail_prompt": item.get("thumbnail_prompt"),
+        "source_url": "https://www.youtube.com/watch?v=" + item_id(item)[:11],
+        "youtube_url": item.get("youtube_url"),
+        "publish_at": item.get("publish_at"),
+        "discard_reason": item.get("discard_reason"),
+    }
+
+
+def _check_daily_limit(publish_at: datetime) -> None:
+    """At most one upload per local day, and at most one video going live per day."""
+    today = _local_day(datetime.now(UTC))
+    for item in _queue():
+        uploaded = item.get("uploaded_at")
+        if uploaded and _local_day(_parse_time(uploaded)) == today:
+            raise ValueError(
+                f"Already uploaded {item['title']!r} today ({today}, {LOCAL_TZ.key}). "
+                "One upload per day."
+            )
+    if jobs.active("publish"):
+        raise ValueError("A publish job is already queued or running.")
+    publish_day = _local_day(publish_at)
+    for video in _channel_videos(refresh=True):
+        if _local_day(_parse_time(video["publish_time"])) == publish_day:
+            raise ValueError(
+                f"{video['title']!r} already goes live on {publish_day} "
+                f"({LOCAL_TZ.key}). Pick another day or skip today."
+            )
+
+
+def _publish_job(args: dict) -> str:
+    config = _config()
+    queue = _queue()
+    item = _find_item(queue, args["item_id"])
+    if item["status"] != "pending":
+        raise ValueError(f"Clip is {item['status']}, not pending.")
+    if args.get("publish_at"):
+        item["publish_at"] = args["publish_at"]
+        item.pop("privacy", None)
+    else:
+        item["privacy"] = "public"
+        item.pop("publish_at", None)
+    youtube = get_youtube_service(_token())
+    ok = upload_single_video(
+        youtube,
+        item,
+        Path(item["thumbnail_path"]),
+        config.channel.description_template,
+        config.youtube,
+    )
+    item["status"] = "uploaded" if ok else "failed"
+    item["uploaded_at"] = datetime.now(UTC).isoformat()
+    write_json_file(paths.queue_file, queue)
+    if not ok:
+        raise RuntimeError("Upload failed; see log.")
+    Path(item["clip_path"]).unlink(missing_ok=True)  # YouTube has it now
+    return item["youtube_url"]
+
+
+def _process_job(args: dict) -> str:
+    config = _config()
+    thumbnail = config.channel.thumbnail_template
+    if not thumbnail:
+        raise ValueError("Set thumbnail_template for this channel in config.toml.")
+    run = make_run(args["url"], paths, config, thumbnail)
+    run_pipeline(run, paths)
+    # The clips are cut and the transcript is cached; the source media is only
+    # disk usage now (re-running the source downloads it again).
+    for media in ("video.mp4", "audio.mp3"):
+        (run.work_dir / media).unlink(missing_ok=True)
+    source = extract_video_id(args["url"])
+    made = [i for i in _queue() if item_id(i).startswith(source)]
+    return f"{len(made)} clips from {source} are in the queue."
+
+
+jobs: JobRunner  # created in main() once the data directory exists
+
+
+# --- MCP tools --------------------------------------------------------------
+
+mcp = MCPServer(
+    name="clipper",
+    instructions=(
+        f"Runs the '{CHANNEL}' YouTube clip channel: analytics and revenue, finding "
+        "source videos, turning them into clips, editing and publishing them, and "
+        "editing existing videos. Long work runs as background jobs; poll `jobs`."
+    ),
+)
+
+
+def tool(annotations: ToolAnnotations):
+    """Register a tool whose failures reach the agent with their real message."""
+
+    def register(fn):
+        @functools.wraps(fn)
+        async def wrapper(*args, **kwargs):
+            try:
+                return await fn(*args, **kwargs)
+            except ToolError:
+                raise
+            except Exception as exc:
+                raise ToolError(f"{type(exc).__name__}: {exc}") from exc
+
+        return mcp.tool(annotations=annotations)(wrapper)
+
+    return register
+
+
+@tool(READ)
+async def channel_report(days: int = 28) -> dict:
+    """Channel performance for the last `days` days: totals (views, watch hours,
+    revenue, API spend, profit), daily views/revenue, and every video with views
+    in the window ranked by revenue (with RPM, retention %, lifetime views)."""
+    return await _sync(_channel_report, days)
+
+
+@tool(READ)
+async def video_report(video_id: str, days: int = 90) -> dict:
+    """Deep dive on one of the channel's videos: metadata, retention curve every
+    10% (with performance vs similar videos), traffic sources, and thumbnail
+    impressions/CTR when the API provides them."""
+    return await _sync(_video_report, video_id, days)
+
+
+@tool(READ)
+async def list_channel_videos(limit: int = 30) -> list[dict]:
+    """The channel's uploads newest first, including scheduled (private) ones,
+    with lifetime views/likes/comments and publish time."""
+    videos = await _sync(_channel_videos, True)
+    return [
+        {k: v for k, v in video.items() if k != "description"}
+        for video in videos[:limit]
+    ]
+
+
+@tool(READ)
+async def find_source_videos(
+    query: str | None = None,
+    channel_url: str | None = None,
+    limit: int = 20,
+    newest_first: bool = True,
+) -> list[dict]:
+    """Find candidate source videos: pass `query` for a YouTube search (newest
+    uploads first unless newest_first=false; e.g. "jonathan blow interview"), or `channel_url` for a
+    channel's /videos, /streams or a playlist (e.g.
+    https://www.youtube.com/@jblow888/videos). Each result says whether this
+    channel already clipped it."""
+    return await _sync(_find_sources, query, channel_url, limit, newest_first)
+
+
+@tool(READ)
+async def source_video_info(url: str, transcript_chars: int = 6000) -> dict:
+    """Details for one candidate source: title, channel, length, description,
+    chapters, whether it was already clipped, and the start of its captions so
+    you can confirm Jonathan Blow is actually the one talking."""
+    return await _sync(_source_info, url, transcript_chars)
+
+
+@tool(WRITE)
+async def process_source(url: str) -> dict:
+    """Start turning a source video into clips in the background: download,
+    transcribe, pick 8-20 minute clips with the clip prompt, cut them, draw
+    thumbnails, and add them to the queue as pending. Takes 20-90 minutes and
+    costs API money (roughly $0.30/hour of audio plus LLM calls). Nothing is
+    uploaded. Returns a job; check it with `jobs`."""
+    video_id = extract_video_id(url)
+    if video_id in await _sync(_processed_sources):
+        raise ValueError(f"{video_id} was already clipped for this channel.")
+    if jobs.active("process_source"):
+        raise ValueError("A source is already being processed; wait for it.")
+    return jobs.submit("process_source", {"url": url})
+
+
+@tool(READ)
+async def list_jobs(limit: int = 10) -> list[dict]:
+    """Recent background jobs (newest first) with status, result, error, and the
+    last log lines."""
+    return jobs.list(limit)
+
+
+@tool(READ)
+async def list_queue(status: str = "pending") -> list[dict]:
+    """Clips in the local queue with `status` pending, uploaded, failed,
+    discarded, or all. Pending clips are ready to publish."""
+    items = [i for i in _queue() if i.get("clip_path")]
+    if status != "all":
+        items = [i for i in items if i["status"] == status]
+    return [_queue_view(i) for i in items]
+
+
+@tool(READ)
+async def view_thumbnail(clip_id: str | None = None, video_id: str | None = None):
+    """Show a thumbnail image: a queued clip's (`clip_id`) or a live channel
+    video's (`video_id`)."""
+    if clip_id:
+        path = Path(_find_item(_queue(), clip_id)["thumbnail_path"])
+        return Image(data=path.read_bytes(), format="jpeg")
+    if video_id:
+        resp = await _sync(
+            requests.get,
+            f"https://i.ytimg.com/vi/{video_id}/maxresdefault.jpg",
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return Image(data=resp.content, format="jpeg")
+    raise ValueError("Pass clip_id or video_id.")
+
+
+def _edit_clip(
+    clip_id: str,
+    title: str | None,
+    description: str | None,
+    tags: list[str] | None,
+    thumbnail_prompt: str | None,
+) -> dict:
+    queue = _queue()
+    item = _find_item(queue, clip_id)
+    if item["status"] != "pending":
+        raise ValueError(f"Clip is {item['status']}; edit the live video instead.")
+    if title is not None:
+        if len(title) > 100:
+            raise ValueError("YouTube titles are at most 100 characters.")
+        item["title"] = title
+    if description is not None:
+        item["description"] = description
+    if tags is not None:
+        item["tags"] = tags
+    if thumbnail_prompt is not None:
+        config = _config()
+        thumbnail = render_thumbnail(
+            thumbnail_prompt,
+            Path(item["clip_path"]).parent,
+            os.environ["OPENROUTER_API_KEY"],
+            paths.resolve_upload_thumbnail(config.channel.thumbnail_template),
+            config.channel,
+            config.models.image,
+            config.thumbnails,
+        )
+        if thumbnail is None:
+            raise RuntimeError("Thumbnail generation failed; the old one is kept.")
+        item["thumbnail_prompt"] = thumbnail_prompt
+        item["thumbnail_path"] = str(thumbnail)
+    write_json_file(paths.queue_file, queue)
+    return _queue_view(item)
+
+
+@tool(LOCAL_WRITE)
+async def edit_clip(
+    clip_id: str,
+    title: str | None = None,
+    description: str | None = None,
+    tags: list[str] | None = None,
+    thumbnail_prompt: str | None = None,
+) -> dict:
+    """Change a pending clip before it is published. `description` is the clip
+    blurb; the channel's description template wraps it with links. A new
+    `thumbnail_prompt` (a visual description of the idea, no style words) draws
+    a fresh illustration onto the channel's thumbnail template; view it after."""
+    return await _sync(_edit_clip, clip_id, title, description, tags, thumbnail_prompt)
+
+
+@tool(LOCAL_WRITE)
+async def discard_clip(clip_id: str, reason: str) -> dict:
+    """Drop a pending clip you never want to publish (weak topic, not Jonathan
+    Blow talking, duplicate). Nothing on YouTube changes."""
+    queue = _queue()
+    item = _find_item(queue, clip_id)
+    if item["status"] != "pending":
+        raise ValueError(f"Clip is {item['status']}, not pending.")
+    item["status"] = "discarded"
+    item["discard_reason"] = reason
+    write_json_file(paths.queue_file, queue)
+    Path(item["clip_path"]).unlink(missing_ok=True)
+    return _queue_view(item)
+
+
+@tool(WRITE)
+async def publish_clip(clip_id: str, publish_at: str | None = None) -> dict:
+    """Upload a pending clip to the channel. Without `publish_at` it goes public
+    as soon as it uploads; with an ISO 8601 time (e.g. 2026-09-27T14:00:00Z, at
+    least 20 minutes ahead) it uploads now as private and YouTube publishes it
+    then. Refused if anything was already uploaded today or if another video
+    already goes live that day (days in Australia/Sydney time). Returns a job."""
+    when = datetime.now(UTC)
+    if publish_at:
+        when = _parse_time(publish_at).astimezone(UTC)
+        if when < datetime.now(UTC) + timedelta(minutes=20):
+            raise ValueError("publish_at must be at least 20 minutes in the future.")
+    item = _find_item(_queue(), clip_id)
+    if item["status"] != "pending":
+        raise ValueError(f"Clip is {item['status']}, not pending.")
+    await _sync(_check_daily_limit, when)
+    return jobs.submit(
+        "publish",
+        {
+            "item_id": clip_id,
+            "publish_at": when.strftime("%Y-%m-%dT%H:%M:%SZ") if publish_at else None,
+        },
+    )
+
+
+def _update_video(
+    video_id: str,
+    title: str | None,
+    description: str | None,
+    tags: list[str] | None,
+) -> dict:
+    youtube = get_youtube_service(_token())
+    current = youtube.videos().list(part="snippet", id=video_id).execute()["items"]
+    if not current:
+        raise ValueError(f"No video {video_id} on this channel.")
+    snippet = current[0]["snippet"]
+    body = {
+        "title": title if title is not None else snippet["title"],
+        "description": description
+        if description is not None
+        else snippet.get("description", ""),
+        "categoryId": snippet["categoryId"],
+        "tags": tags if tags is not None else snippet.get("tags", []),
+    }
+    if len(body["title"]) > 100:
+        raise ValueError("YouTube titles are at most 100 characters.")
+    youtube.videos().update(
+        part="snippet", body={"id": video_id, "snippet": body}
+    ).execute()
+    _channel_videos(refresh=True)
+    return {"id": video_id, **body}
+
+
+@tool(WRITE)
+async def update_video(
+    video_id: str,
+    title: str | None = None,
+    description: str | None = None,
+    tags: list[str] | None = None,
+) -> dict:
+    """Edit a video already on the channel (retitle an underperformer, fix a
+    description). `description` replaces the whole description, so keep the
+    'Original:' source link in it. Omitted fields are unchanged."""
+    return await _sync(_update_video, video_id, title, description, tags)
+
+
+def _set_video_thumbnail(video_id: str, thumbnail_prompt: str) -> bytes:
+    from googleapiclient.http import MediaFileUpload
+
+    config = _config()
+    thumbnail = render_thumbnail(
+        thumbnail_prompt,
+        paths.work_root / "video-thumbnails" / video_id,
+        os.environ["OPENROUTER_API_KEY"],
+        paths.resolve_upload_thumbnail(config.channel.thumbnail_template),
+        config.channel,
+        config.models.image,
+        config.thumbnails,
+    )
+    if thumbnail is None:
+        raise RuntimeError("Thumbnail generation failed; nothing changed.")
+    get_youtube_service(_token()).thumbnails().set(
+        videoId=video_id,
+        media_body=MediaFileUpload(str(thumbnail), mimetype="image/jpeg"),
+    ).execute()
+    return thumbnail.read_bytes()
+
+
+@tool(WRITE)
+async def set_video_thumbnail(video_id: str, thumbnail_prompt: str):
+    """Draw a new thumbnail for a live channel video from `thumbnail_prompt` (a
+    visual description of the idea) on the channel template, set it on YouTube,
+    and return it."""
+    data = await _sync(_set_video_thumbnail, video_id, thumbnail_prompt)
+    return Image(data=data, format="jpeg")
+
+
+@tool(READ)
+async def get_prompts() -> dict:
+    """The prompts the pipeline uses right now: clip_extraction_prompt_template
+    (picks clips, titles, descriptions, thumbnail prompts from a transcript),
+    illustration_prompt_template (image model; {prompt} is the thumbnail
+    prompt), and description_template ({clip_description}, {original_url})."""
+    channel = _config().channel
+    return {key: getattr(channel, key) for key in PROMPT_KEYS}
+
+
+@tool(LOCAL_WRITE)
+async def update_prompts(
+    clip_extraction_prompt_template: str | None = None,
+    illustration_prompt_template: str | None = None,
+    description_template: str | None = None,
+) -> dict:
+    """Replace any of the pipeline prompts (see get_prompts). Applies to sources
+    processed from now on. The clip prompt must still ask for the JSON shape
+    {"clips": [{"title", "description", "start_ms", "end_ms",
+    "thumbnail_prompt"}]}; the description template must keep
+    {clip_description} and {original_url}."""
+    overrides = (
+        read_json_file(paths.prompt_overrides_file)
+        if paths.prompt_overrides_file.exists()
+        else {}
+    )
+    changes = {
+        "clip_extraction_prompt_template": clip_extraction_prompt_template,
+        "illustration_prompt_template": illustration_prompt_template,
+        "description_template": description_template,
+    }
+    for key, value in changes.items():
+        if value is not None:
+            overrides[key] = value
+    template = overrides.get("description_template")
+    if template and not {"{clip_description}", "{original_url}"} <= set(
+        re.findall(r"\{\w+\}", template)
+    ):
+        raise ValueError(
+            "description_template needs {clip_description} and {original_url}."
+        )
+    if "{prompt}" not in overrides.get("illustration_prompt_template", "{prompt}"):
+        raise ValueError("illustration_prompt_template needs {prompt}.")
+    write_json_file(paths.prompt_overrides_file, overrides)
+    return await get_prompts()
+
+
+@tool(READ)
+async def read_notes() -> str:
+    """Your strategy notebook from earlier runs: what was tried, what worked,
+    experiments in flight, and the log of past runs. Read it first every run."""
+    if not paths.notes_file.exists():
+        return "(empty)"
+    return paths.notes_file.read_text(encoding="utf-8")
+
+
+@tool(LOCAL_WRITE)
+async def write_notes(content: str, append: bool = True) -> str:
+    """Save to the strategy notebook. `append` adds a dated entry at the end;
+    append=false replaces the whole notebook (use it to condense old entries
+    when it gets long)."""
+    paths.notes_file.parent.mkdir(parents=True, exist_ok=True)
+    if append:
+        stamp = datetime.now(LOCAL_TZ).strftime("%Y-%m-%d %H:%M %Z")
+        with paths.notes_file.open("a", encoding="utf-8") as file:
+            file.write(f"\n\n## {stamp}\n\n{content.strip()}\n")
+    else:
+        paths.notes_file.write_text(content, encoding="utf-8")
+    return f"Saved ({paths.notes_file.stat().st_size} bytes)."
+
+
+# --- entrypoint -------------------------------------------------------------
+
+
+async def _healthz(_: Request) -> PlainTextResponse:
+    return PlainTextResponse("ok")
+
+
+def main() -> None:
+    global jobs
+    load_dotenv(paths.project_root / ".env")
+    setup_logging()
+    secret = os.environ.get("CLIPPER_MCP_SECRET", "")
+    if len(secret) < 32:
+        raise SystemExit("CLIPPER_MCP_SECRET must be set to at least 32 characters.")
+
+    paths.work_root.mkdir(parents=True, exist_ok=True)
+    costs.configure(paths.costs_file)
+    _config()  # fail fast on a broken config.toml
+    jobs = JobRunner(
+        paths.jobs_file, {"process_source": _process_job, "publish": _publish_job}
+    )
+
+    # ChatGPT connectors cannot send a bearer header, so the endpoint path is
+    # the credential: https://<host>/mcp/<secret>.
+    app = mcp.streamable_http_app(
+        streamable_http_path=f"/mcp/{secret}",
+        stateless_http=True,
+        json_response=True,
+        transport_security=TransportSecuritySettings(
+            enable_dns_rebinding_protection=False
+        ),
+    )
+    app.router.routes.append(Route("/healthz", _healthz))
+    uvicorn.run(
+        app,
+        host=os.environ.get("HOST", "0.0.0.0"),
+        port=int(os.environ.get("PORT", "8000")),
+        log_level="warning",
+    )
+
+
+__all__ = ["main", "mcp"]
+
+
+if __name__ == "__main__":
+    main()

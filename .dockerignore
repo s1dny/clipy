@@ -1,0 +1,10 @@
+.venv
+.git
+channels
+*.psd
+.env
+config.toml
+client_secrets.json
+**/__pycache__
+.pytest_cache
+.ruff_cache

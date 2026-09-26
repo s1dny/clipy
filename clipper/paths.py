@@ -15,6 +15,26 @@ class ClipperPaths:
     def queue_file(self) -> Path:
         return self.work_root / "upload_queue.json"
 
+    @property
+    def token_file(self) -> Path:
+        return self.work_root / ".youtube_token.json"
+
+    @property
+    def notes_file(self) -> Path:
+        return self.work_root / "notes.md"
+
+    @property
+    def jobs_file(self) -> Path:
+        return self.work_root / "jobs.json"
+
+    @property
+    def costs_file(self) -> Path:
+        return self.work_root / "costs.jsonl"
+
+    @property
+    def prompt_overrides_file(self) -> Path:
+        return self.work_root / "prompt_overrides.json"
+
     def work_dir_for_url(self, url: str) -> Path:
         return self.work_root / extract_video_id(url)
 

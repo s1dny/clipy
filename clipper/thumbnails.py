@@ -128,6 +128,40 @@ def composite_thumbnail(
         return False
 
 
+def render_thumbnail(
+    prompt: str,
+    folder: Path,
+    api_key: str,
+    template_path: Path,
+    channel_config: ChannelConfig,
+    image_model: str,
+    thumbnail_settings: ThumbnailConfig,
+) -> Path | None:
+    """Generate a fresh illustration for prompt and composite it in folder."""
+    folder.mkdir(parents=True, exist_ok=True)
+    illustration = folder / "generated_thumbnail.png"
+    thumbnail = folder / "thumbnail.jpg"
+    if not generate_illustration(
+        prompt,
+        illustration,
+        api_key,
+        channel_config.illustration_prompt_template,
+        image_model,
+    ):
+        return None
+    if not composite_thumbnail(
+        illustration,
+        thumbnail,
+        template_path,
+        channel_config.illustration_center_x,
+        channel_config.illustration_center_y,
+        thumbnail_settings.illustration_size,
+    ):
+        return None
+    (folder / ".thumbnail_prompt").write_text(prompt, encoding="utf-8")
+    return thumbnail
+
+
 def _generate_single_thumbnail(args: tuple) -> tuple[int, str | None]:
     """Generate a single thumbnail (for use with ThreadPoolExecutor)."""
     (

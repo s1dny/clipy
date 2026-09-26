@@ -1,3 +1,4 @@
+import json
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +19,7 @@ class ModelsConfig:
     clip: str
     image: str
     speech: str
+    assemblyai_usd_per_hour: float
 
 
 @dataclass(frozen=True)
@@ -38,6 +40,14 @@ class ChannelConfig:
     illustration_prompt_template: str
     illustration_center_x: int
     illustration_center_y: int
+    thumbnail_template: str | None
+
+
+PROMPT_KEYS = (
+    "clip_extraction_prompt_template",
+    "illustration_prompt_template",
+    "description_template",
+)
 
 
 @dataclass(frozen=True)
@@ -75,7 +85,9 @@ def _value(
     if not isinstance(value, expected_type) or (
         expected_type is int and isinstance(value, bool)
     ):
-        raise ConfigError(f"config.toml field '{key}' must be {expected_type.__name__}")
+        raise ConfigError(
+            f"config.toml field '{key}' must be {getattr(expected_type, '__name__', expected_type)}"
+        )
     return value
 
 
@@ -92,14 +104,26 @@ def _int_pair(data: dict[str, Any], key: str, default: list[int]) -> tuple[int, 
     return value[0], value[1]
 
 
-def _channel_config(data: dict[str, Any], channel: str) -> ChannelConfig:
+def _read_overrides(overrides_path: Path | None) -> dict[str, str]:
+    if overrides_path is None or not overrides_path.exists():
+        return {}
+    try:
+        data = json.loads(overrides_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ConfigError(f"Invalid JSON in {overrides_path}: {exc}") from exc
+    return {k: v for k, v in data.items() if k in PROMPT_KEYS and isinstance(v, str)}
+
+
+def _channel_config(
+    data: dict[str, Any], channel: str, overrides: dict[str, str]
+) -> ChannelConfig:
     defaults = _table(data, "defaults")
     channels = _table(data, "channels")
     channel_data = channels.get(channel, {})
     if not isinstance(channel_data, dict):
         raise ConfigError(f"config.toml [channels.{channel}] must be a table")
 
-    merged = defaults | channel_data
+    merged = defaults | channel_data | overrides
     return ChannelConfig(
         description_template=_value(merged, "description_template", str),
         clip_extraction_prompt_template=_value(
@@ -110,12 +134,15 @@ def _channel_config(data: dict[str, Any], channel: str) -> ChannelConfig:
         ),
         illustration_center_x=_value(merged, "illustration_center_x", int, 850),
         illustration_center_y=_value(merged, "illustration_center_y", int, 350),
+        thumbnail_template=merged.get("thumbnail_template"),
     )
 
 
-def load_config(project_root: Path, channel: str) -> AppConfig:
-    """Load and validate application and channel settings from config.toml."""
-    data = _read_config_file(project_root / "config.toml")
+def load_config(
+    config_path: Path, channel: str, overrides_path: Path | None = None
+) -> AppConfig:
+    """Load config.toml, then layer the channel's prompt overrides on top."""
+    data = _read_config_file(config_path)
     runtime = _table(data, "runtime")
     models = _table(data, "models")
     thumbnails = _table(data, "thumbnails")
@@ -135,6 +162,9 @@ def load_config(project_root: Path, channel: str) -> AppConfig:
             clip=_value(models, "clip", str, "google/gemini-3.7-flash"),
             image=_value(models, "image", str, "google/gemini-3.1-flash-image"),
             speech=_value(models, "speech", str, "universal-3-5-pro"),
+            assemblyai_usd_per_hour=float(
+                _value(models, "assemblyai_usd_per_hour", int | float, 0.27)
+            ),
         ),
         thumbnails=ThumbnailConfig(
             illustration_size=_int_pair(thumbnails, "illustration_size", [700, 700]),
@@ -143,5 +173,5 @@ def load_config(project_root: Path, channel: str) -> AppConfig:
             publish_hour_utc=publish_hour,
             category_id=_value(youtube, "category_id", str, "22"),
         ),
-        channel=_channel_config(data, channel),
+        channel=_channel_config(data, channel, _read_overrides(overrides_path)),
     )

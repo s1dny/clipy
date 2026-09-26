@@ -1,4 +1,5 @@
 import logging
+import os
 import random
 import sys
 from datetime import UTC, date, datetime, timedelta
@@ -20,54 +21,94 @@ from .queue import load_queue
 
 logger = logging.getLogger(__name__)
 
-YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+YOUTUBE_SCOPES = [
+    "https://www.googleapis.com/auth/youtube",
+    "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/yt-analytics.readonly",
+    "https://www.googleapis.com/auth/yt-analytics-monetary.readonly",
+]
 
 
-def get_youtube_service(work_root: Path, project_root: Path):
-    """Authenticate with YouTube API and return service object."""
-    from google.auth.exceptions import RefreshError
-    from google.oauth2.credentials import Credentials
+class YouTubeAuthError(RuntimeError):
+    """Raised when there is no usable token and no one to consent interactively."""
+
+
+def _client_secrets_path(project_root: Path) -> Path:
+    configured = os.environ.get("YOUTUBE_CLIENT_SECRETS")
+    return Path(configured) if configured else project_root / "client_secrets.json"
+
+
+def authorize(token_path: Path, project_root: Path) -> None:
+    """Run the OAuth consent flow in a browser and cache the token."""
     from google_auth_oauthlib.flow import InstalledAppFlow
-    from googleapiclient.discovery import build
 
-    token_path = work_root / ".youtube_token.json"
-    client_secrets_path = project_root / "client_secrets.json"
+    client_secrets_path = _client_secrets_path(project_root)
+    if not client_secrets_path.exists():
+        logger.error("YouTube client secrets not found at %s", client_secrets_path)
+        logger.error("Download OAuth 2.0 credentials from Google Cloud Console")
+        logger.error("and save as client_secrets.json in the project root.")
+        sys.exit(1)
+    flow = InstalledAppFlow.from_client_secrets_file(
+        str(client_secrets_path), YOUTUBE_SCOPES
+    )
+    creds = flow.run_local_server(port=0, prompt="consent")
+    token_path.parent.mkdir(parents=True, exist_ok=True)
+    token_path.write_text(creds.to_json(), encoding="utf-8")
+    logger.info("Saved YouTube token to %s", token_path)
 
-    creds = None
-    if token_path.exists():
-        creds = Credentials.from_authorized_user_file(str(token_path), YOUTUBE_SCOPES)
 
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            from google.auth.transport.requests import Request
+def get_credentials(token_path: Path):
+    """Load, refresh, and persist the cached token, which must hold every scope."""
+    from google.auth.exceptions import RefreshError
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
 
-            try:
-                creds.refresh(Request())
-            except RefreshError as exc:
-                logger.warning("YouTube token refresh failed; reauthorizing: %s", exc)
-                creds = None
-                try:
-                    token_path.unlink()
-                except FileNotFoundError:
-                    pass
+    seed = os.environ.get("YOUTUBE_TOKEN_JSON")
+    if not token_path.exists() and seed:
+        token_path.parent.mkdir(parents=True, exist_ok=True)
+        token_path.write_text(seed, encoding="utf-8")
 
-        if not creds or not creds.valid:
-            if not client_secrets_path.exists():
-                logger.error(
-                    "YouTube client secrets not found at %s",
-                    client_secrets_path,
-                )
-                logger.error("Download OAuth 2.0 credentials from Google Cloud Console")
-                logger.error("and save as client_secrets.json in the project root.")
-                sys.exit(1)
-            flow = InstalledAppFlow.from_client_secrets_file(
-                str(client_secrets_path), YOUTUBE_SCOPES
-            )
-            creds = flow.run_local_server(port=0, open_browser=False)
+    if not token_path.exists():
+        raise YouTubeAuthError(f"No YouTube token at {token_path}; run 'auth'.")
 
+    creds = Credentials.from_authorized_user_file(str(token_path))
+    missing = set(YOUTUBE_SCOPES) - set(creds.scopes or [])
+    if missing:
+        raise YouTubeAuthError(
+            f"YouTube token lacks scopes {sorted(missing)}; run 'auth' again."
+        )
+
+    if not creds.valid:
+        if not creds.refresh_token:
+            raise YouTubeAuthError("YouTube token has no refresh token; run 'auth'.")
+        try:
+            creds.refresh(Request())
+        except RefreshError as exc:
+            raise YouTubeAuthError(
+                f"YouTube token refresh failed ({exc}); run 'auth' again."
+            ) from exc
         token_path.write_text(creds.to_json(), encoding="utf-8")
 
-    return build("youtube", "v3", credentials=creds)
+    return creds
+
+
+def get_youtube_service(token_path: Path):
+    from googleapiclient.discovery import build
+
+    return build(
+        "youtube", "v3", credentials=get_credentials(token_path), cache_discovery=False
+    )
+
+
+def get_analytics_service(token_path: Path):
+    from googleapiclient.discovery import build
+
+    return build(
+        "youtubeAnalytics",
+        "v2",
+        credentials=get_credentials(token_path),
+        cache_discovery=False,
+    )
 
 
 def upload_single_video(
@@ -113,7 +154,12 @@ def upload_single_video(
     )
 
     scheduled_date = item.get("scheduled_date")
-    if scheduled_date:
+    if item.get("publish_at"):
+        status_body = {"privacyStatus": "private", "publishAt": item["publish_at"]}
+        logger.info("Scheduled to publish: %s", item["publish_at"])
+    elif item.get("privacy") == "public":
+        status_body = {"privacyStatus": "public"}
+    elif scheduled_date:
         publish_at = f"{scheduled_date}T{settings.publish_hour_utc:02d}:00:00Z"
         status_body = {
             "privacyStatus": "private",
@@ -130,6 +176,7 @@ def upload_single_video(
             "title": title,
             "description": description,
             "categoryId": settings.category_id,
+            **({"tags": item["tags"]} if item.get("tags") else {}),
         },
         "status": status_body,
     }
@@ -343,7 +390,13 @@ def upload_from_queue(
         return
 
     # Authenticate with YouTube
-    youtube = get_youtube_service(queue_file.parent, project_root)
+    token_path = queue_file.parent / ".youtube_token.json"
+    try:
+        youtube = get_youtube_service(token_path)
+    except YouTubeAuthError as exc:
+        logger.warning("%s", exc)
+        authorize(token_path, project_root)
+        youtube = get_youtube_service(token_path)
 
     for item in pending:
         thumbnail_path = resolved_thumbnails[item["clip_path"]]

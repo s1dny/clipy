@@ -1,0 +1,32 @@
+name: upgrade yt-dlp
+
+# YouTube breaks old yt-dlp releases within weeks, and the channel runs
+# unattended, so pick up new releases daily and ship them through ci.
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  upgrade:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - run: uv lock --upgrade-package yt-dlp
+      - name: Commit and deploy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git diff --quiet uv.lock && exit 0
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "chore: upgrade yt-dlp"
+          git push
+          # Pushes made with GITHUB_TOKEN do not start workflows; dispatch does.
+          gh workflow run ci.yml --ref main

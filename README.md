@@ -85,13 +85,47 @@ clipper --channel philosophy upload
 
 Uploads all pending clips from the selected channel queue (`channels/<channel>/upload_queue.json`) to YouTube as private, scheduled to publish one per day. Dates are assigned in random order on first run. Each queue item must have a valid `thumbnail_path`.
 
+### Authorize YouTube
+
+```bash
+clipper --channel blow auth
+```
+
+Opens Google consent in a browser and saves `channels/<channel>/.youtube_token.json`
+with upload, channel-management and Analytics (including revenue) scopes. Sign in
+as the account that owns the channel, and enable the YouTube Analytics API in the
+Google Cloud project. Keep the OAuth app "In production": a "Testing" app's
+refresh tokens expire after 7 days.
+
+### MCP server
+
+`clipper-mcp` serves one channel (`CLIPPER_CHANNEL`, default `blow`) over
+Streamable HTTP at `/mcp/$CLIPPER_MCP_SECRET` for an agent to run the channel:
+analytics and revenue (with API spend from `costs.jsonl`, so profit), source
+discovery, clipping sources as background jobs, editing and publishing clips,
+editing live videos and thumbnails, prompt overrides, and a strategy notebook.
+It refuses a second upload in one day, or a second video going live on one day
+(`CLIPPER_TIMEZONE`, default Australia/Sydney).
+
+| Variable | Meaning |
+|---|---|
+| `CLIPPER_MCP_SECRET` | Required, 32+ characters; the endpoint path is the credential |
+| `CLIPPER_DATA_DIR` | Holds `channels/<channel>/` (default: the repo) |
+| `CLIPPER_CONFIG` | Path to `config.toml` (default: the repo's) |
+| `YOUTUBE_TOKEN_JSON` | Seeds the token file when it is missing |
+| `PORT`, `HOST` | Listen address (default `0.0.0.0:8000`) |
+
+Production runs on azalab-0 from `ghcr.io/s1dny/clipper`; see
+`flux/clusters/azalab-0/manifests/apps/clipper` in the homelab repo, and
+[`docs/chatgpt-task.md`](docs/chatgpt-task.md) for the daily ChatGPT task.
+
 ### Options
 
 | Flag | Description |
 |---|---|
 | `--step N` | Force re-run from step N (1-6), e.g. `--step 5` to regenerate all thumbnails |
 | `--channel NAME` | Required. Uses `./channels/NAME` as the work directory |
-| `--thumbnail FILE` | Required for URL runs. Resolved from `./thumbnails/FILE` or `./thumbnail/FILE`, and used as the template for each generated clip thumbnail. |
+| `--thumbnail FILE` | Required for URL runs unless the channel sets `thumbnail_template`. Resolved from `./thumbnails/FILE` or `./thumbnail/FILE`, and used as the template for each generated clip thumbnail. |
 
 ## Project structure
 
@@ -112,9 +146,13 @@ clipper/
     thumbnails.py      # Illustration + thumbnail generation/compositing
     paths.py           # Centralized path helpers for workspace artifacts
     queue.py           # Upload queue persistence + thumbnail path resolution
-    upload.py          # YouTube upload flow and scheduling
+    upload.py          # YouTube auth, upload flow and scheduling
+    mcp_server.py      # MCP server an agent uses to run a channel
+    jobs.py            # Background job runner for the MCP server
+    costs.py           # API spend ledger
     logging_config.py  # Logging setup
   client_secrets.json  # YouTube OAuth credentials (not committed)
+  tests/               # End-to-end tests against the running MCP server
   thumbnails/
     <template>.jpg     # Thumbnail templates passed via --thumbnail
   channels/

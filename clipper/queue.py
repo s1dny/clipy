@@ -69,6 +69,9 @@ def save_queue(clips: list[dict], queue_file: Path) -> None:
             "description": clip["description"],
             "clip_path": clip_path,
             "thumbnail_path": clip.get("thumbnail_path"),
+            "thumbnail_prompt": clip.get("thumbnail_prompt"),
+            "score": clip.get("score"),
+            "duration_seconds": round((clip["end_ms"] - clip["start_ms"]) / 1000),
             "status": "pending",
             "created_at": datetime.now(UTC).isoformat(),
         }
@@ -79,6 +82,13 @@ def save_queue(clips: list[dict], queue_file: Path) -> None:
 
     logger.info("Queue saved: %s", queue_file)
     logger.info("Total clips in queue: %s", len(queue))
+
+
+def item_id(item: dict) -> str:
+    """Stable queue id: '<source video id>:<clip number>' from the clip path."""
+    parts = Path(item["clip_path"]).parts
+    clips_idx = parts.index("clips")
+    return f"{parts[clips_idx - 1]}:{parts[clips_idx + 1][:2]}"
 
 
 def remove_work_dir_entries(queue_file: Path, work_dir: Path) -> None:
