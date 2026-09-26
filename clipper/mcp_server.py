@@ -335,6 +335,16 @@ def _find_sources(
 
 
 def _caption_text(info: dict, limit: int) -> str:
+    """Best-effort caption preview; YouTube sometimes serves empty tracks."""
+    if limit <= 0:
+        return ""
+    try:
+        return _fetch_captions(info, limit)
+    except (requests.RequestException, ValueError) as exc:
+        return f"(captions unavailable: {exc})"
+
+
+def _fetch_captions(info: dict, limit: int) -> str:
     tracks = info.get("subtitles", {}).get("en") or info.get(
         "automatic_captions", {}
     ).get("en")
