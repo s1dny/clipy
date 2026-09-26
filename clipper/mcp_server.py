@@ -493,6 +493,7 @@ def _queue_view(item: dict) -> dict:
         "duration_minutes": round(item.get("duration_seconds", 0) / 60, 1) or None,
         "predicted_score": item.get("score"),
         "thumbnail_prompt": item.get("thumbnail_prompt"),
+        "chapters": item.get("chapters", []),
         "source_url": "https://www.youtube.com/watch?v=" + item_id(item)[:11],
         "youtube_url": item.get("youtube_url"),
         "publish_at": item.get("publish_at"),
@@ -739,8 +740,9 @@ async def edit_clip(
     tags: list[str] | None = None,
     thumbnail_prompt: str | None = None,
 ) -> dict:
-    """Change a pending clip before it is published. `description` is the clip
-    blurb; the channel's description template wraps it with links. A new
+    """Change a pending clip before it is published. `description` is the
+    summary written during processing; at upload the clip's chapters are
+    appended and the channel's description template wraps it with links. A new
     `thumbnail_prompt` (a visual description of the idea, no style words) draws
     a fresh illustration onto the channel's thumbnail template; view it after."""
     return await _sync(_edit_clip, clip_id, title, description, tags, thumbnail_prompt)

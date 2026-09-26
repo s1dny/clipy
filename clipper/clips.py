@@ -77,6 +77,77 @@ def extract_clips(
     return clips
 
 
+ANNOTATE_TIMEOUT_SECONDS = 600
+ANNOTATE_PROMPT = """Below is the transcript of one YouTube clip of Jonathan Blow, with
+timestamps from the start of the clip. Write:
+
+1. "summary": 3-5 sentences in plain language saying what he argues or
+   explains, with the specific technologies, games, or people he names. It
+   goes at the top of the video description, so make it genuinely useful to
+   someone deciding whether to watch; no hype, no claims he doesn't make.
+2. "chapters": 3-8 chapters marking where the discussion moves to a new point,
+   each {"start_seconds": <int>, "title": "<2-6 words>"}. The first starts at
+   0; chapters are at least 30 seconds apart.
+
+Return only JSON: {"summary": "...", "chapters": [...]}"""
+
+
+def _clock(seconds: int) -> str:
+    minutes, secs = divmod(int(seconds), 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
+
+
+def annotate_clip(
+    sentences: list[dict], start_ms: int, end_ms: int, api_key: str, model: str
+) -> dict:
+    """Summary and chapter list for one clip, from its slice of the transcript."""
+    lines = [
+        f"[{_clock((s['start'] - start_ms) / 1000)}] {s['text']}"
+        for s in sentences
+        if start_ms <= s["start"] < end_ms
+    ]
+    data = openrouter_request(
+        api_key,
+        {
+            "model": model,
+            "messages": [
+                {"role": "user", "content": ANNOTATE_PROMPT + "\n\n" + "\n".join(lines)}
+            ],
+            "response_format": {"type": "json_object"},
+            "provider": {"sort": "price"},
+        },
+        ANNOTATE_TIMEOUT_SECONDS,
+    )
+    text = openrouter_message_text(data)
+    result = json.loads(text[text.index("{") : text.rindex("}") + 1])
+    return {
+        "summary": result["summary"].strip(),
+        "chapters": valid_chapters(
+            result.get("chapters", []), (end_ms - start_ms) / 1000
+        ),
+    }
+
+
+def valid_chapters(chapters: list[dict], duration: float) -> list[dict]:
+    """Chapters YouTube will accept: first at 0:00, at least three, each at
+    least 10 seconds long. Anything else is dropped rather than half-applied."""
+    kept: list[dict] = []
+    for chapter in sorted(chapters, key=lambda c: c["start_seconds"]):
+        start = int(chapter["start_seconds"])
+        if 0 <= start < duration - 10 and (
+            not kept or start - kept[-1]["start_seconds"] >= 10
+        ):
+            kept.append({"start_seconds": start, "title": chapter["title"].strip()})
+    if kept:
+        kept[0]["start_seconds"] = 0
+    return kept if len(kept) >= 3 else []
+
+
+def chapters_text(chapters: list[dict]) -> str:
+    return "\n".join(f"{_clock(c['start_seconds'])} {c['title']}" for c in chapters)
+
+
 def cut_clip(
     video_path: Path,
     start_ms: int,

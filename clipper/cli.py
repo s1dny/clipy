@@ -3,14 +3,15 @@ import logging
 import os
 import shutil
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 from . import costs
-from .clips import cut_clips, extract_clips
-from .common import load_or_compute
+from .clips import annotate_clip, cut_clips, extract_clips
+from .common import load_or_compute, write_json_file
 from .config import AppConfig, load_config
 from .download import download_video
 from .logging_config import setup_logging
@@ -160,6 +161,35 @@ def _maybe_download(run: PipelineRun) -> tuple[Path, Path]:
     return download_video(run.url, run.work_dir, run.config.runtime.ffmpeg_path)
 
 
+def annotate_clips(clips: list[dict], sentences: list[dict], run: PipelineRun):
+    """Give each clip a real summary (its description) and YouTube chapters,
+    cached in clips.json. A failure leaves that clip's short description."""
+    todo = [clip for clip in clips if "chapters" not in clip]
+    if not todo:
+        return clips
+    logger.info("[3/6] Writing summaries and chapters for %s clips...", len(todo))
+
+    def annotate(clip: dict) -> None:
+        try:
+            notes = annotate_clip(
+                sentences,
+                clip["start_ms"],
+                clip["end_ms"],
+                run.openrouter_key,
+                run.config.models.clip,
+            )
+        except Exception as exc:  # noqa: BLE001 - chapters are optional
+            logger.warning("Could not annotate %r: %s", clip["title"], exc)
+            return
+        clip["description"] = notes["summary"]
+        clip["chapters"] = notes["chapters"]
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(annotate, todo))
+    write_json_file(run.work_dir / "clips.json", clips)
+    return clips
+
+
 def run_pipeline(run: PipelineRun, paths: ClipperPaths) -> None:
     logger.info("URL: %s", run.url)
     logger.info("Work dir: %s", run.work_dir)
@@ -194,6 +224,7 @@ def run_pipeline(run: PipelineRun, paths: ClipperPaths) -> None:
         run.config.models.clip,
         skip_message="[3/6] Extracting clip segments with LLM... skipped: clips already extracted",
     )
+    clips = annotate_clips(clips, sentences, run)
     clips = cut_clips(video_path, clips, run.work_dir, run.config.runtime.ffmpeg_path)
     clips = generate_thumbnails(
         clips,
