@@ -1,6 +1,7 @@
-__pycache__/
-.DS_Store
-*.env
-*.json
+videos.md
 config.toml
 channels/
+*.json
+*.env
+.DS_Store
+__pycache__/
