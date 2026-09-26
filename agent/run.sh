@@ -3,6 +3,8 @@
 # subscription, driving the clipper MCP server. CODEX_HOME must be persistent
 # so the refreshed ChatGPT tokens in auth.json survive between runs.
 set -eu
+# pipefail: the run fails if codex fails, not just tee.
+set -o pipefail 2>/dev/null || true
 
 : "${CODEX_HOME:=/data/codex}"
 : "${CLIPPER_MCP_URL:=http://clipper.clipper.svc:8000/mcp/${CLIPPER_MCP_SECRET:?}}"
@@ -14,7 +16,8 @@ if [ ! -s "$CODEX_HOME/auth.json" ]; then
   exit 1
 fi
 
-exec codex exec \
+log=/tmp/agent/run.log
+codex exec \
   --skip-git-repo-check \
   --ephemeral \
   --cd /tmp/agent \
@@ -28,4 +31,11 @@ exec codex exec \
   -c 'mcp_servers.clipper.default_tools_approval_mode="approve"' \
   -c 'mcp_servers.clipper.tool_timeout_sec=300' \
   --output-last-message "$CODEX_HOME/runs/$(date -u +%Y-%m-%dT%H%MZ).md" \
-  - < "${CLIPPER_AGENT_PROMPT:-/app/agent/prompt.md}"
+  - < "${CLIPPER_AGENT_PROMPT:-/app/agent/prompt.md}" 2>&1 | tee "$log"
+
+# Codex exits 0 even when every tool call failed, so judge the run by whether
+# it actually reached the clipper server.
+if ! grep -q '^mcp: clipper/.* (completed)' "$log"; then
+  echo "clipper-agent: no clipper tool call completed; failing the run" >&2
+  exit 1
+fi
