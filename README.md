@@ -117,7 +117,7 @@ It refuses a second upload in one day, or a second video going live on one day
 
 Production runs on azalab-0 from `ghcr.io/s1dny/clipper`; see
 `flux/clusters/azalab-0/manifests/apps/clipper` in the homelab repo, and
-[`docs/chatgpt-task.md`](docs/chatgpt-task.md) for the daily ChatGPT task.
+[`docs/daily-agent.md`](docs/daily-agent.md) for the daily agent.
 
 ### Options
 
