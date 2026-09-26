@@ -29,7 +29,7 @@ codex exec \
   -c "mcp_servers.clipper.url=\"$CLIPPER_MCP_URL\"" \
   -c 'mcp_servers.clipper.required=true' \
   -c 'mcp_servers.clipper.default_tools_approval_mode="approve"' \
-  -c 'mcp_servers.clipper.tool_timeout_sec=300' \
+  -c 'mcp_servers.clipper.tool_timeout_sec=900' \
   --output-last-message "$CODEX_HOME/runs/$(date -u +%Y-%m-%dT%H%MZ).md" \
   - < "${CLIPPER_AGENT_PROMPT:-/app/agent/prompt.md}" 2>&1 | tee "$log"
 

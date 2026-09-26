@@ -138,9 +138,14 @@ def test_endpoint_requires_the_secret_path(server):
         async with Client(f"{base}/mcp/{SECRET}") as client:
             return {tool.name for tool in (await client.list_tools()).tools}
 
-    assert {"channel_report", "process_source", "publish_clip", "write_notes"} <= (
-        asyncio.run(names())
-    )
+    assert {
+        "channel_report",
+        "process_source",
+        "publish_clip",
+        "write_notes",
+        "sample_source",
+        "wait_for_job",
+    } <= (asyncio.run(names()))
 
 
 def test_notes_persist_between_runs(server):
@@ -193,3 +198,10 @@ def test_prompt_overrides_are_validated_and_applied(server):
     prompts = data(call(base, "get_prompts"))
     assert prompts["clip_extraction_prompt_template"].startswith("Prefer programming")
     assert prompts["illustration_prompt_template"] == "Draw {prompt} on white."
+
+
+def test_waiting_on_an_unknown_job_says_so(server):
+    base, _ = server
+    result = call(base, "wait_for_job", {"job_id": "nope", "max_minutes": 1})
+    assert result.is_error
+    assert "No job 'nope'" in text(result)

@@ -6,9 +6,11 @@ The one-upload-per-day rule is enforced here, not left to the prompt.
 """
 
 import functools
+import json
 import logging
 import os
 import re
+import tempfile
 import time
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -29,15 +31,17 @@ from mcp.types import ToolAnnotations
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 from starlette.routing import Route
+from yt_dlp.utils import download_range_func
 
 from . import costs
 from .cli import build_paths, load_app_config, make_run, run_pipeline
-from .common import extract_video_id, read_json_file, write_json_file
+from .common import extract_video_id, read_json_file, run_cmd, write_json_file
 from .config import PROMPT_KEYS, AppConfig
 from .jobs import JobRunner
 from .logging_config import setup_logging
 from .queue import item_id, load_queue
 from .thumbnails import render_thumbnail
+from .transcription import transcribe_audio
 from .upload import get_analytics_service, get_youtube_service, upload_single_video
 
 logger = logging.getLogger(__name__)
@@ -334,35 +338,117 @@ def _find_sources(
     ][:limit]
 
 
-def _caption_text(info: dict, limit: int) -> str:
-    """Best-effort caption preview; YouTube sometimes serves empty tracks."""
+def _caption_text(ydl: yt_dlp.YoutubeDL, info: dict, limit: int) -> str:
+    """Best-effort caption preview. Long streams often have no captions, and
+    YouTube rate-limits caption downloads per IP (HTTP 429)."""
     if limit <= 0:
         return ""
-    try:
-        return _fetch_captions(info, limit)
-    except (requests.RequestException, ValueError) as exc:
-        return f"(captions unavailable: {exc})"
-
-
-def _fetch_captions(info: dict, limit: int) -> str:
-    tracks = info.get("subtitles", {}).get("en") or info.get(
-        "automatic_captions", {}
-    ).get("en")
-    if not tracks:
-        return ""
-    track = next((t for t in tracks if t.get("ext") == "json3"), None)
+    tracks = next(
+        (
+            group[lang]
+            for group in (
+                info.get("subtitles") or {},
+                info.get("automatic_captions") or {},
+            )
+            for lang in ("en", "en-orig", "en-US", "en-GB")
+            if group.get(lang)
+        ),
+        None,
+    )
+    track = next((t for t in tracks or [] if t.get("ext") == "json3"), None)
     if not track:
-        return ""
-    events = requests.get(track["url"], timeout=30).json().get("events", [])
+        return "(no English captions; use sample_source to hear who is talking)"
+    try:
+        # yt-dlp's own client, so the request impersonates a browser.
+        events = json.loads(ydl.urlopen(track["url"]).read()).get("events", [])
+    except (yt_dlp.utils.YoutubeDLError, OSError, ValueError) as exc:
+        return f"(captions unavailable: {exc}; use sample_source instead)"
     text = " ".join(
         seg.get("utf8", "").strip() for ev in events for seg in ev.get("segs", [])
     )
     return re.sub(r"\s+", " ", text)[:limit]
 
 
+SAMPLE_POINTS = (0.2, 0.5, 0.8)
+
+
+def _sample_source(url: str, minutes: int) -> dict:
+    config = _config()
+    with _ydl() as ydl:
+        info = ydl.extract_info(url, download=False)
+    duration = info.get("duration") or 0
+    span = minutes * 60
+    if duration <= span * len(SAMPLE_POINTS):
+        ranges = [(0, duration or span * len(SAMPLE_POINTS))]
+    else:
+        ranges = [
+            (duration * p - span / 2, duration * p + span / 2) for p in SAMPLE_POINTS
+        ]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        options = {
+            "format": "bestaudio/best",
+            "download_ranges": download_range_func(None, ranges),
+            "outtmpl": f"{tmp}/part%(section_number)s.%(ext)s",
+            "ffmpeg_location": config.runtime.ffmpeg_path,
+        }
+        with _ydl(**options) as ydl:
+            ydl.download([url])
+        parts = sorted(p for p in Path(tmp).iterdir() if p.name.startswith("part"))
+        if not parts:
+            raise RuntimeError("yt-dlp downloaded no audio samples.")
+        sample = Path(tmp) / "sample.mp3"
+        inputs = [arg for part in parts for arg in ("-i", str(part))]
+        streams = "".join(f"[{i}:a]" for i in range(len(parts)))
+        code, _out, err = run_cmd(
+            [
+                config.runtime.ffmpeg_path,
+                "-y",
+                *inputs,
+                "-filter_complex",
+                f"{streams}concat=n={len(parts)}:v=0:a=1",
+                "-c:a",
+                "libmp3lame",
+                "-q:a",
+                "4",
+                str(sample),
+            ]
+        )
+        if code != 0:
+            raise RuntimeError(f"ffmpeg could not join the samples: {err[-300:]}")
+        transcript = transcribe_audio(
+            sample,
+            os.environ["ASSEMBLYAI_API_KEY"],
+            config.models.speech,
+            config.models.assemblyai_usd_per_hour,
+        )
+
+    words: dict[str, int] = {}
+    lines = []
+    for u in transcript.get("utterances") or []:
+        words[u["speaker"]] = words.get(u["speaker"], 0) + len(u["text"].split())
+        lines.append(f"{u['speaker']}: {u['text']}")
+    total = sum(words.values()) or 1
+    return {
+        "title": info.get("title"),
+        "channel": info.get("channel"),
+        "sampled_at_minutes": [round(start / 60) for start, _ in ranges],
+        "sampled_minutes": round(sum(end - start for start, end in ranges) / 60),
+        "speakers": sorted(
+            (
+                {"speaker": s, "share_of_words_percent": round(100 * n / total)}
+                for s, n in words.items()
+            ),
+            key=lambda row: -row["share_of_words_percent"],
+        ),
+        "transcript": "\n".join(lines)[:6000],
+    }
+
+
 def _source_info(url: str, transcript_chars: int) -> dict:
     with _ydl() as ydl:
         info = ydl.extract_info(url, download=False)
+        captions = _caption_text(ydl, info, transcript_chars)
     return {
         "url": url,
         "title": info.get("title"),
@@ -376,7 +462,7 @@ def _source_info(url: str, transcript_chars: int) -> dict:
             for c in info.get("chapters") or []
         ],
         "already_clipped": info["id"] in _processed_sources(),
-        "transcript_preview": _caption_text(info, transcript_chars),
+        "transcript_preview": captions,
     }
 
 
@@ -545,19 +631,30 @@ async def find_source_videos(
     newest_first: bool = True,
 ) -> list[dict]:
     """Find candidate source videos: pass `query` for a YouTube search (newest
-    uploads first unless newest_first=false; e.g. "jonathan blow interview"), or `channel_url` for a
-    channel's /videos, /streams or a playlist (e.g.
-    https://www.youtube.com/@jblow888/videos). Each result says whether this
-    channel already clipped it."""
+    uploads first unless newest_first=false; e.g. "jonathan blow interview"),
+    or `channel_url` for a channel's /videos or a playlist (e.g.
+    https://www.youtube.com/@jblow888/videos, where his streams are too). Each
+    result says whether this channel already clipped it."""
     return await _sync(_find_sources, query, channel_url, limit, newest_first)
 
 
 @tool(READ)
 async def source_video_info(url: str, transcript_chars: int = 6000) -> dict:
     """Details for one candidate source: title, channel, length, description,
-    chapters, whether it was already clipped, and the start of its captions so
-    you can confirm Jonathan Blow is actually the one talking."""
+    chapters, whether it was already clipped, and the start of its captions
+    when YouTube provides them (often it does not: long streams lack captions
+    and caption downloads get rate-limited). Free."""
     return await _sync(_source_info, url, transcript_chars)
+
+
+@tool(READ)
+async def sample_source(url: str, minutes_per_sample: int = 3) -> dict:
+    """Hear a candidate source before paying to process it: downloads three
+    short audio samples (at 20%, 50% and 80% of the video), transcribes them
+    with speaker labels, and returns each speaker's share of the words plus the
+    labelled transcript, so you can tell whether Jonathan Blow is the main
+    speaker and what he talks about. Costs about $0.04; takes a minute or two."""
+    return await _sync(_sample_source, url, max(1, min(minutes_per_sample, 5)))
 
 
 @tool(WRITE)
@@ -566,7 +663,7 @@ async def process_source(url: str) -> dict:
     transcribe, pick 8-20 minute clips with the clip prompt, cut them, draw
     thumbnails, and add them to the queue as pending. Takes 20-90 minutes and
     costs API money (roughly $0.30/hour of audio plus LLM calls). Nothing is
-    uploaded. Returns a job; check it with `jobs`."""
+    uploaded. Returns a job; follow it with wait_for_job."""
     video_id = extract_video_id(url)
     if video_id in await _sync(_processed_sources):
         raise ValueError(f"{video_id} was already clipped for this channel.")
@@ -580,6 +677,21 @@ async def list_jobs(limit: int = 10) -> list[dict]:
     """Recent background jobs (newest first) with status, result, error, and the
     last log lines."""
     return jobs.list(limit)
+
+
+@tool(READ)
+async def wait_for_job(job_id: str, max_minutes: int = 10) -> dict:
+    """Wait (server-side, without using tokens) until a job finishes or
+    `max_minutes` pass (at most 14), then return it. Use this instead of
+    calling list_jobs repeatedly."""
+    deadline = time.monotonic() + max(1, min(max_minutes, 14)) * 60
+    while True:
+        job = next((j for j in jobs.list(10_000) if j["id"] == job_id), None)
+        if job is None:
+            raise ValueError(f"No job {job_id!r}; see list_jobs.")
+        if job["status"] in {"succeeded", "failed"} or time.monotonic() > deadline:
+            return job
+        await anyio.sleep(10)
 
 
 @tool(READ)

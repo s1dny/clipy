@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import sys
 from pathlib import Path
 
 from .common import openrouter_message_text, openrouter_request, run_cmd
@@ -110,31 +111,33 @@ def cut_clip(
         "+faststart",
     ]
 
-    # Fast path for Apple Silicon hardware encoding.
-    code, _out, err = run_cmd(
-        [
-            *common,
-            "-c:v",
-            "h264_videotoolbox",
-            "-b:v",
-            "10M",
-            "-maxrate",
-            "14M",
-            "-bufsize",
-            "20M",
-            "-profile:v",
-            "high",
-            "-allow_sw",
-            "1",
-            "-realtime",
-            "0",
-            str(output_path),
-        ]
-    )
-    if code == 0:
-        return True
+    # Fast path for Apple Silicon hardware encoding; VideoToolbox only exists
+    # on macOS, so elsewhere go straight to libx264.
+    if sys.platform == "darwin":
+        code, _out, err = run_cmd(
+            [
+                *common,
+                "-c:v",
+                "h264_videotoolbox",
+                "-b:v",
+                "10M",
+                "-maxrate",
+                "14M",
+                "-bufsize",
+                "20M",
+                "-profile:v",
+                "high",
+                "-allow_sw",
+                "1",
+                "-realtime",
+                "0",
+                str(output_path),
+            ]
+        )
+        if code == 0:
+            return True
+        logger.warning("VideoToolbox encode failed, falling back to libx264.")
 
-    logger.warning("VideoToolbox encode failed, falling back to libx264.")
     code, _out, err = run_cmd(
         [
             *common,
