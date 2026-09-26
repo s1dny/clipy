@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import tempfile
 import time
 from datetime import UTC, date, datetime, timedelta
@@ -393,7 +394,9 @@ def _sample_source(url: str, minutes: int) -> dict:
             "format": "bestaudio/best",
             "download_ranges": download_range_func(None, ranges),
             "outtmpl": f"{tmp}/part%(section_number)s.%(ext)s",
-            "ffmpeg_location": config.runtime.ffmpeg_path,
+            # yt-dlp wants a path, and config may name a command on PATH.
+            "ffmpeg_location": shutil.which(config.runtime.ffmpeg_path)
+            or config.runtime.ffmpeg_path,
         }
         with _ydl(**options) as ydl:
             ydl.download([url])
