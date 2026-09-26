@@ -22,7 +22,7 @@ would share one rotating refresh token between two machines, and whichever
 refreshed second would be signed out. Sign in once with a device code:
 
 ```bash
-ssh -t azalab-0 kubectl -n clipper exec -it deploy/clipper -- env CODEX_HOME=/data/codex codex login --device-auth
+ssh -t azalab-0 "kubectl -n clipper exec -it deploy/clipper -- sh -c 'mkdir -p /data/codex && CODEX_HOME=/data/codex exec codex login --device-auth'"
 ```
 
 Open the printed link, enter the code, and approve. If ChatGPT refuses device
