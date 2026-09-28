@@ -17,6 +17,8 @@ if [ ! -s "$CODEX_HOME/auth.json" ]; then
 fi
 
 log=/tmp/agent/run.log
+summary="$CODEX_HOME/runs/$(date -u +%Y-%m-%dT%H%MZ).md"
+status=0
 codex exec \
   --skip-git-repo-check \
   --ephemeral \
@@ -30,12 +32,23 @@ codex exec \
   -c 'mcp_servers.clipper.required=true' \
   -c 'mcp_servers.clipper.default_tools_approval_mode="approve"' \
   -c 'mcp_servers.clipper.tool_timeout_sec=900' \
-  --output-last-message "$CODEX_HOME/runs/$(date -u +%Y-%m-%dT%H%MZ).md" \
-  - < "${CLIPPER_AGENT_PROMPT:-/app/agent/prompt.md}" 2>&1 | tee "$log"
+  --output-last-message "$summary" \
+  - < "${CLIPPER_AGENT_PROMPT:-/app/agent/prompt.md}" 2>&1 | tee "$log" || status=$?
 
 # Codex exits 0 even when every tool call failed, so judge the run by whether
 # it actually reached the clipper server.
-if ! grep -q '^mcp: clipper/.* (completed)' "$log"; then
+if [ "$status" -eq 0 ] && ! grep -q '^mcp: clipper/.* (completed)' "$log"; then
   echo "clipper-agent: no clipper tool call completed; failing the run" >&2
-  exit 1
+  status=1
 fi
+
+# Tell Aiden how it went: the agent's closing summary, or why the run failed.
+if [ -n "${MATRIX_ACCESS_TOKEN:-}" ]; then
+  if [ "$status" -ne 0 ] || [ ! -s "$summary" ]; then
+    summary=/tmp/agent/failure.txt
+    { echo "The Jonathan Blow Clips agent run failed (exit $status). Last log lines:"
+      tail -n 15 "$log"; } > "$summary"
+  fi
+  python /app/agent/notify.py "$summary" || echo "clipper-agent: Matrix notify failed" >&2
+fi
+exit "$status"
