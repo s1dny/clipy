@@ -1,162 +1,165 @@
-# Clipper
+# Clipy
 
-## Requirements
+Clipy is a fully autonomous YouTube automation bot. It runs the
+[Jonathan Blow Clips](https://www.youtube.com/@JonathanBlowClips) channel on
+its own, with one goal: maximise YouTube ad revenue minus what it spends on
+APIs.
 
-- Python 3.14+
-- [ffmpeg](https://ffmpeg.org/)
-- [yt-dlp](https://github.com/yt-dlp/yt-dlp) (installed as a Python dependency)
+Every day an AI agent reads the channel's analytics, decides what to change,
+finds and clips new source videos, schedules uploads, retitles and
+re-thumbnails underperforming videos, keeps a strategy notebook, and sends a
+report over Matrix. The only human step is turning on monetization for each
+week's uploads in YouTube Studio, which the YouTube API cannot do.
 
-## Setup
+## How it works
 
-Install project dependencies with:
-
-```bash
-uv sync
+```
+  Codex (ChatGPT login)  ── MCP, bearer token ──▶  clipy-mcp  ──▶  YouTube Data,
+  agent/run.sh, daily                               (tools,          Analytics and
+  at 04:00 AEST                                      jobs)            Reporting APIs
+        │                                              │
+        ▼                                              ▼
+  Matrix report                         pipeline: yt-dlp → AssemblyAI → LLM clip
+  ("clipy status" room)                 picks, summaries, chapters → ffmpeg →
+                                        thumbnails → upload queue
 ```
 
-To install a `clipper` command into your CLI with `uv`, run:
+- **The agent** is Codex CLI (`codex exec`) signed in with a ChatGPT
+  subscription, not an API key. [`agent/prompt.md`](agent/prompt.md) holds the
+  whole channel policy: Jonathan Blow must be the main speaker, only original
+  long-form sources, one video goes live per day, uploads happen in a weekly
+  batch on Mondays (Sydney time) as private videos scheduled 12 hours to 8 days
+  ahead, and the daily review and tuning routine. Changing the policy means
+  editing the prompt; the server enforces none of it.
+- **The MCP server** (`clipy-mcp`) is mechanism only. Its 20 tools cover
+  analytics and revenue (profit is revenue minus the API spend in
+  `costs.jsonl`), thumbnail impressions and click-through (from the YouTube
+  Reporting API's daily reach reports), source discovery and speaker checks,
+  background clipping and upload jobs, clip and live-video editing, prompt
+  overrides, and a strategy notebook that is the agent's memory between runs.
+- **The pipeline** downloads a source, transcribes it with speaker labels,
+  has an LLM pick 8-20 minute clips, writes each clip a summary and YouTube
+  chapters, cuts them with ffmpeg, draws thumbnails onto the channel's
+  template, and queues them. Every step is cached, so an interrupted job
+  resumes.
+- **The report**: after each run, [`agent/run.sh`](agent/run.sh) sends the
+  agent's one-paragraph summary (earnings, top videos, changes, anything to
+  do) to Aiden over Matrix, followed by a stats line with the run's duration,
+  input and output tokens, and tool calls. A failed run sends the failure
+  instead.
+
+## Weekly human step
+
+Each Monday the agent schedules the coming week's videos. In YouTube Studio,
+open Content, select the scheduled videos, then Edit, Monetization: On, before
+Tuesday's goes live. The Monday report lists them.
+
+## Production
+
+Clipy runs on azalab-0 from `ghcr.io/s1dny/clipy`, built by CI from each green
+`main` commit and rolled out by Flux; see
+`flux/clusters/azalab-0/manifests/apps/clipy` in the homelab repo. The
+`clipy` Deployment serves the MCP server in-cluster at
+`http://clipy.clipy.svc:8000/mcp`, and the `clipy-agent` CronJob runs the
+agent daily at 04:00 AEST (`Australia/Brisbane`, so 05:00 in Sydney during
+daylight saving). State lives on the host at `/srv/clipy`: channel data under
+`channels/<channel>/` and the agent's Codex login and run summaries under
+`codex/`.
+
+Run the agent now:
 
 ```bash
-uv tool install --editable .
+ssh azalab-0 kubectl -n clipy create job --from=cronjob/clipy-agent agent-manual-$(date +%s)
 ```
 
-Copy `.env.example` to `.env` and add the two API keys. Secrets are the only
-settings kept in `.env`.
+Logs are in `kubectl -n clipy logs job/<name>`. Sign the agent into ChatGPT
+(once, or if its login ever expires) with a device code, which keeps the
+server's session separate from your laptop's:
 
-Copy `config.toml.example` to `config.toml` and customize it for your channels.
+```bash
+ssh -t azalab-0 "kubectl -n clipy exec -it deploy/clipy -- sh -c 'mkdir -p /data/codex && CODEX_HOME=/data/codex exec codex login --device-auth'"
+```
 
-`config.toml` contains all non-secret settings. The `[runtime]`, `[models]`,
-`[thumbnails]`, and `[youtube]` tables configure the pipeline. `[models]` groups
-the clip, image, and speech model names. `[defaults]` provides shared templates
-and `[channels.<name>]` provides channel overrides. Any missing channel value
-falls back to `[defaults]`.
+## Configuration
 
-### YouTube upload setup
+`config.toml` holds all non-secret settings: models, thumbnail layout, the
+YouTube category, and per-channel prompt templates and thumbnail template
+(`[channels.<name>]` overrides `[defaults]`). Copy `config.toml.example` to
+start. The agent can override the three prompt templates at runtime with the
+`update_prompts` tool; overrides live in the channel's
+`prompt_overrides.json`.
 
-1. Create a project in the [Google Cloud Console](https://console.cloud.google.com/)
-2. Enable the **YouTube Data API v3**
-3. Create OAuth 2.0 credentials (Desktop app)
-4. Download the JSON and save it as `client_secrets.json` in the project root
-5. Run `clipper --channel <name> auth` (see below)
+| Variable | Used by | Meaning |
+|---|---|---|
+| `ASSEMBLYAI_API_KEY` | pipeline | Transcription |
+| `OPENROUTER_API_KEY` | pipeline | Clip picking, summaries, thumbnails |
+| `CLIPY_MCP_TOKEN` | server, agent | Bearer token for the MCP server, 32+ characters |
+| `CLIPY_CHANNEL` | server | Channel to run (default `blow`) |
+| `CLIPY_DATA_DIR` | server, CLI | Holds `channels/<channel>/` (default: the repo) |
+| `CLIPY_CONFIG` | server, CLI | Path to `config.toml` (default: the repo's) |
+| `CLIPY_TIMEZONE` | server | Timezone for notebook timestamps (default `Australia/Sydney`) |
+| `YOUTUBE_TOKEN_JSON` | server | Seeds the channel's YouTube token file when it is missing |
+| `YOUTUBE_CLIENT_SECRETS` | `clipy auth` | OAuth client file (default `client_secrets.json`) |
+| `CODEX_MODEL`, `CODEX_REASONING` | agent | Model and effort (default `gpt-6-sol`, `medium`) |
+| `MATRIX_ACCESS_TOKEN` | agent | The report bot's token; no reports without it |
+| `MATRIX_HOMESERVER`, `MATRIX_NOTIFY_USER` | agent | Where and to whom reports go |
+
+Secrets for local use go in `.env` (see `.env.example`).
+
+### YouTube access
+
+In the Google Cloud project, enable the YouTube Data API v3, YouTube Analytics
+API and YouTube Reporting API, create an OAuth client (Desktop app) saved as
+`client_secrets.json`, and keep the OAuth app "In production" (a "Testing"
+app's refresh tokens expire after 7 days). Then, signed in as the account that
+owns the channel:
+
+```bash
+clipy --channel blow auth
+```
+
+This saves `channels/<channel>/.youtube_token.json` with upload,
+channel-management and Analytics (including revenue) scopes.
+
+## Local use
+
+Install with `uv sync` (or `uv tool install --editable .` for a `clipy`
+command). Requires Python 3.14 and ffmpeg.
+
+```bash
+clipy --channel blow <youtube-url>   # clip one source into the channel queue
+clipy --channel blow --step 5 <url>  # redo from a step (1-6), e.g. thumbnails
+```
 
 ## Development
 
-Format the codebase with Ruff:
-
 ```bash
 uv run ruff format .
-```
-
-Check lint rules with:
-
-```bash
 uv run ruff check .
+uv run pytest tests   # boots the MCP server and drives it end to end
 ```
 
-## Usage
+## Layout
 
-### Full pipeline
-
-`--channel <name>` is required and writes to `./channels/<name>`. Thumbnails
-are drawn onto the channel's `thumbnail_template` from `./thumbnails`.
-
-```bash
-clipper --channel philosophy <youtube-url>
 ```
-
-This runs all 6 steps:
-
-1. Download video and extract audio
-2. Transcribe with AssemblyAI
-3. Extract clip segments with LLM
-4. Cut clips with ffmpeg
-5. Generate thumbnails
-6. Save to channel upload queue
-
-Results are cached per step, so re-running the same URL resumes from where it left off. Changes to `clips.json` (titles, thumbnail prompts) and missing thumbnails are detected automatically on re-run.
-
-### Authorize YouTube
-
-```bash
-clipper --channel blow auth
-```
-
-Opens Google consent in a browser and saves `channels/<channel>/.youtube_token.json`
-with upload, channel-management and Analytics (including revenue) scopes. Sign in
-as the account that owns the channel, and enable the YouTube Analytics API in the
-Google Cloud project. Keep the OAuth app "In production": a "Testing" app's
-refresh tokens expire after 7 days.
-
-### MCP server
-
-`clipper-mcp` serves one channel (`CLIPPER_CHANNEL`, default `blow`) over
-Streamable HTTP at `/mcp/$CLIPPER_MCP_SECRET` for an agent to run the channel:
-analytics and revenue (with API spend from `costs.jsonl`, so profit), source
-discovery, clipping sources as background jobs, editing and publishing clips,
-editing live videos and thumbnails, prompt overrides, and a strategy notebook.
-It is mechanism only: when to publish and what to clip is up to the agent's
-prompt ([`agent/prompt.md`](agent/prompt.md)).
-
-| Variable | Meaning |
-|---|---|
-| `CLIPPER_MCP_SECRET` | Required, 32+ characters; the endpoint path is the credential |
-| `CLIPPER_DATA_DIR` | Holds `channels/<channel>/` (default: the repo) |
-| `CLIPPER_CONFIG` | Path to `config.toml` (default: the repo's) |
-| `YOUTUBE_TOKEN_JSON` | Seeds the token file when it is missing |
-| `PORT`, `HOST` | Listen address (default `0.0.0.0:8000`) |
-
-Production runs on azalab-0 from `ghcr.io/s1dny/clipper`; see
-`flux/clusters/azalab-0/manifests/apps/clipper` in the homelab repo, and
-[`docs/daily-agent.md`](docs/daily-agent.md) for the daily agent.
-
-### Options
-
-| Flag | Description |
-|---|---|
-| `--step N` | Force re-run from step N (1-6), e.g. `--step 5` to regenerate all thumbnails |
-| `--channel NAME` | Required. Uses `./channels/NAME` as the work directory |
-
-## Project structure
-
-```bash
-clipper/
-  main.py              # Thin CLI entrypoint
-  pyproject.toml       # Project metadata and dependencies
-  config.toml.example  # Minimal config template to copy locally
-  config.toml          # Shared defaults + per-channel prompt templates
-  uv.lock              # Locked dependency versions
-  clipper/
-    __init__.py        # Package marker
-    cli.py             # Pipeline orchestration and argument parsing
-    common.py          # Shared helpers (API calls, command runner, caching)
-    download.py        # Video download + audio extraction
-    transcription.py   # AssemblyAI transcription + sentence segmentation
-    clips.py           # LLM clip extraction + ffmpeg clip cutting
-    thumbnails.py      # Illustration + thumbnail generation/compositing
-    paths.py           # Centralized path helpers for workspace artifacts
-    queue.py           # Clip queue persistence
-    upload.py          # YouTube auth and uploading
-    mcp_server.py      # MCP server an agent uses to run a channel
-    jobs.py            # Background job runner for the MCP server
-    costs.py           # API spend ledger
-    logging_config.py  # Logging setup
-  client_secrets.json  # YouTube OAuth credentials (not committed)
-  tests/               # End-to-end tests against the running MCP server
-  thumbnails/
-    <template>.jpg     # Thumbnail templates named by thumbnail_template
-  channels/
-    <channel>/
-      upload_queue.json   # Channel upload queue
-      .youtube_token.json # OAuth token cache (created by auth)
-      <video-id>/
-        video.mp4
-        audio.mp3
-        transcript.json
-        sentences.json
-        clips.json
-        clips/
-          01 - Clip Title/
-            video.mp4
-            generated_thumbnail.png
-            thumbnail.jpg
+agent/
+  prompt.md          The channel policy and daily routine the agent follows
+  run.sh             One agent run: codex exec, stats, Matrix report
+  events.py          Reads codex's JSON events: live log and the stats line
+  notify.py          Posts to the Matrix report room
+clipy/
+  mcp_server.py      MCP tools the agent uses to run the channel
+  jobs.py            Background job runner (clipping, uploads)
+  cli.py             Pipeline orchestration and the clipy CLI
+  download.py        yt-dlp download and audio extraction
+  transcription.py   AssemblyAI transcription with speaker labels
+  clips.py           LLM clip picking, summaries and chapters, ffmpeg cutting
+  thumbnails.py      Illustration generation and thumbnail compositing
+  upload.py          YouTube auth and uploads
+  reach.py           Impressions and click-through from reach reports
+  queue.py           The channel's clip queue
+  costs.py           API spend ledger
+  config.py, paths.py, common.py, logging_config.py
+tests/               End-to-end tests against the running server
+thumbnails/          Channel thumbnail templates
 ```

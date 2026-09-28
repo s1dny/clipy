@@ -1,7 +1,7 @@
 [project]
-name = "clipper"
+name = "clipy"
 version = "1.0.0"
-description = "Clipper: The YouTube Automator - Downloads videos, extracts clips, generates thumbnails and uploads all automatically"
+description = "Clipy: a fully autonomous YouTube clip channel run by an AI agent"
 requires-python = ">=3.14"
 dependencies = [
     "assemblyai>=1.0.0",
@@ -18,8 +18,8 @@ dependencies = [
 ]
 
 [project.scripts]
-clipper = "clipper.cli:main"
-clipper-mcp = "clipper.mcp_server:main"
+clipy = "clipy.cli:main"
+clipy-mcp = "clipy.mcp_server:main"
 
 [build-system]
 requires = ["hatchling"]

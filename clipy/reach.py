@@ -52,7 +52,7 @@ def sync(token: Path, store: Path, force: bool = False) -> dict:
         if job is None:
             job = (
                 api.jobs()
-                .create(body={"reportTypeId": REPORT_TYPE, "name": "clipper reach"})
+                .create(body={"reportTypeId": REPORT_TYPE, "name": "clipy reach"})
                 .execute()
             )
             logger.info("Created reach reporting job %s", job["id"])

@@ -5,7 +5,7 @@ from .common import extract_video_id
 
 
 @dataclass(frozen=True)
-class ClipperPaths:
+class ClipyPaths:
     """Centralized project and work directory layout."""
 
     project_root: Path

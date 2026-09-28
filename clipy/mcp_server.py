@@ -7,6 +7,7 @@ agent's prompt.
 """
 
 import functools
+import hmac
 import json
 import logging
 import os
@@ -48,8 +49,8 @@ from .upload import get_analytics_service, get_youtube_service, upload_video
 
 logger = logging.getLogger(__name__)
 
-CHANNEL = os.environ.get("CLIPPER_CHANNEL", "blow")
-LOCAL_TZ = ZoneInfo(os.environ.get("CLIPPER_TIMEZONE", "Australia/Sydney"))
+CHANNEL = os.environ.get("CLIPY_CHANNEL", "blow")
+LOCAL_TZ = ZoneInfo(os.environ.get("CLIPY_TIMEZONE", "Australia/Sydney"))
 VIDEO_ID_RE = re.compile(r"(?:youtube\.com/watch\?v=|youtu\.be/)([\w-]{11})")
 DURATION_RE = re.compile(r"P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?")
 CHANNEL_CACHE_SECONDS = 600
@@ -559,7 +560,7 @@ jobs: JobRunner  # created in main() once the data directory exists
 # --- MCP tools --------------------------------------------------------------
 
 mcp = MCPServer(
-    name="clipper",
+    name="clipy",
     instructions=(
         f"Runs the '{CHANNEL}' YouTube clip channel: analytics and revenue, finding "
         "source videos, turning them into clips, editing and publishing them, and "
@@ -950,13 +951,29 @@ async def _healthz(_: Request) -> PlainTextResponse:
     return PlainTextResponse("ok")
 
 
+class _RequireToken:
+    """Every request except /healthz needs `Authorization: Bearer <token>`."""
+
+    def __init__(self, app, token: str):
+        self.app = app
+        self.expected = f"Bearer {token}".encode()
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope["path"] != "/healthz":
+            supplied = dict(scope["headers"]).get(b"authorization", b"")
+            if not hmac.compare_digest(supplied, self.expected):
+                await PlainTextResponse("unauthorized", 401)(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
 def main() -> None:
     global jobs
     load_dotenv(paths.project_root / ".env")
     setup_logging()
-    secret = os.environ.get("CLIPPER_MCP_SECRET", "")
-    if len(secret) < 32:
-        raise SystemExit("CLIPPER_MCP_SECRET must be set to at least 32 characters.")
+    token = os.environ.get("CLIPY_MCP_TOKEN", "")
+    if len(token) < 32:
+        raise SystemExit("CLIPY_MCP_TOKEN must be set to at least 32 characters.")
 
     paths.work_root.mkdir(parents=True, exist_ok=True)
     costs.configure(paths.costs_file)
@@ -965,10 +982,8 @@ def main() -> None:
         paths.jobs_file, {"process_source": _process_job, "publish": _publish_job}
     )
 
-    # ChatGPT connectors cannot send a bearer header, so the endpoint path is
-    # the credential: https://<host>/mcp/<secret>.
     app = mcp.streamable_http_app(
-        streamable_http_path=f"/mcp/{secret}",
+        streamable_http_path="/mcp",
         stateless_http=True,
         json_response=True,
         transport_security=TransportSecuritySettings(
@@ -977,7 +992,7 @@ def main() -> None:
     )
     app.router.routes.append(Route("/healthz", _healthz))
     uvicorn.run(
-        app,
+        _RequireToken(app, token),
         host=os.environ.get("HOST", "0.0.0.0"),
         port=int(os.environ.get("PORT", "8000")),
         log_level="warning",

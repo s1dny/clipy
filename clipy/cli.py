@@ -15,7 +15,7 @@ from .common import load_or_compute, write_json_file
 from .config import AppConfig, load_config
 from .download import download_video
 from .logging_config import setup_logging
-from .paths import ClipperPaths
+from .paths import ClipyPaths
 from .queue import remove_work_dir_entries, save_queue
 from .thumbnails import generate_thumbnails
 from .transcription import build_sentence_transcript, transcribe_audio
@@ -73,17 +73,17 @@ def _validate_channel(parser: argparse.ArgumentParser, channel: str) -> str:
     return channel
 
 
-def build_paths(channel: str) -> ClipperPaths:
-    """Channel state lives under $CLIPPER_DATA_DIR/channels, defaulting to the repo."""
+def build_paths(channel: str) -> ClipyPaths:
+    """Channel state lives under $CLIPY_DATA_DIR/channels, defaulting to the repo."""
     project_root = Path(__file__).resolve().parent.parent
-    data_root = Path(os.environ.get("CLIPPER_DATA_DIR") or project_root)
+    data_root = Path(os.environ.get("CLIPY_DATA_DIR") or project_root)
     work_root = data_root / "channels" / channel
-    return ClipperPaths(project_root=project_root, work_root=work_root)
+    return ClipyPaths(project_root=project_root, work_root=work_root)
 
 
-def load_app_config(paths: ClipperPaths, channel: str) -> AppConfig:
+def load_app_config(paths: ClipyPaths, channel: str) -> AppConfig:
     config_path = Path(
-        os.environ.get("CLIPPER_CONFIG") or paths.project_root / "config.toml"
+        os.environ.get("CLIPY_CONFIG") or paths.project_root / "config.toml"
     )
     return load_config(config_path, channel, paths.prompt_overrides_file)
 
@@ -96,7 +96,7 @@ def _require_env(parser: argparse.ArgumentParser, key: str) -> str:
 
 
 def make_run(
-    url: str, paths: ClipperPaths, config: AppConfig, force_step: int | None = None
+    url: str, paths: ClipyPaths, config: AppConfig, force_step: int | None = None
 ) -> PipelineRun:
     """Build a pipeline run; raises KeyError/FileNotFoundError on missing inputs."""
     return PipelineRun(
@@ -113,7 +113,7 @@ def make_run(
 def _build_pipeline_run(
     args: argparse.Namespace,
     parser: argparse.ArgumentParser,
-    paths: ClipperPaths,
+    paths: ClipyPaths,
     config: AppConfig,
 ) -> PipelineRun:
     if args.url is None:
@@ -126,7 +126,7 @@ def _build_pipeline_run(
         parser.error(str(exc))
 
 
-def _force_rerun_from_step(run: PipelineRun, paths: ClipperPaths) -> None:
+def _force_rerun_from_step(run: PipelineRun, paths: ClipyPaths) -> None:
     """Delete outputs from a step onward so downstream steps are recomputed."""
     for step in range(run.force_step or 0, 7):
         for filename in STEP_OUTPUTS.get(step, []):
@@ -190,7 +190,7 @@ def annotate_clips(clips: list[dict], sentences: list[dict], run: PipelineRun):
     return clips
 
 
-def run_pipeline(run: PipelineRun, paths: ClipperPaths) -> None:
+def run_pipeline(run: PipelineRun, paths: ClipyPaths) -> None:
     logger.info("URL: %s", run.url)
     logger.info("Work dir: %s", run.work_dir)
 

@@ -29,7 +29,7 @@ def create_progress(*columns, transient: bool = False) -> Progress:
 
 def setup_logging() -> None:
     """Configure project logging with Rich output and tracebacks."""
-    logger = logging.getLogger("clipper")
+    logger = logging.getLogger("clipy")
     if logger.handlers:
         return
 

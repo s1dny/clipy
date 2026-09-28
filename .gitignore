@@ -5,5 +5,4 @@ channels/
 *.env
 .DS_Store
 __pycache__/
-.mcp-url
 .matrix-token

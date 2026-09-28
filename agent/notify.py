@@ -40,8 +40,8 @@ def room() -> str:
             "preset": "trusted_private_chat",
             "is_direct": True,
             "invite": [RECIPIENT],
-            "name": "Jonathan Blow Clips",
-            "topic": "Daily report from the channel agent",
+            "name": "clipy status",
+            "topic": "Daily reports from clipy, the Jonathan Blow Clips agent",
         },
     )["room_id"]
     ROOM_FILE.write_text(room_id)
@@ -50,7 +50,7 @@ def room() -> str:
 
 def send(text: str) -> None:
     room_id = urllib.parse.quote(room())
-    txn = f"clipper-{time.time_ns()}"
+    txn = f"clipy-{time.time_ns()}"
     call(
         "PUT",
         f"/_matrix/client/v3/rooms/{room_id}/send/m.room.message/{txn}",

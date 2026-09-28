@@ -2,7 +2,7 @@ FROM ghcr.io/astral-sh/uv:0.9 AS uv
 FROM denoland/deno:bin AS deno
 
 FROM debian:trixie-slim AS codex
-# The daily channel agent (agent/run.sh) is Codex CLI on a ChatGPT login.
+# The agent (agent/run.sh) is Codex CLI on a ChatGPT login.
 # Codex runs tool calls through codex-code-mode-host and sandboxes commands with
 # bwrap; both ship as separate release assets and must sit beside codex.
 ARG CODEX_VERSION=0.156.1
@@ -34,16 +34,16 @@ WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PROJECT_ENVIRONMENT=/app/.venv
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
-COPY clipper ./clipper
+COPY clipy ./clipy
 COPY thumbnails/*.jpg ./thumbnails/
 COPY agent ./agent
-COPY main.py README.md ./
+COPY README.md ./
 RUN uv sync --frozen --no-dev
 
 ENV PATH=/app/.venv/bin:$PATH \
     PYTHONUNBUFFERED=1 \
-    CLIPPER_DATA_DIR=/data \
+    CLIPY_DATA_DIR=/data \
     HOME=/tmp
 USER 10001:10001
 EXPOSE 8000
-CMD ["clipper-mcp"]
+CMD ["clipy-mcp"]

@@ -259,7 +259,7 @@ wheels = [
 ]
 
 [[package]]
-name = "clipper"
+name = "clipy"
 version = "1.0.0"
 source = { editable = "." }
 dependencies = [

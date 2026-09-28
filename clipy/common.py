@@ -44,57 +44,8 @@ def openrouter_request(api_key: str, body: dict, timeout: int) -> dict[str, Any]
 
 
 def openrouter_message(data: dict) -> dict[str, Any]:
-    """Normalize chat-completions and responses-style payloads to a message dict."""
-    choices = data.get("choices")
-    if isinstance(choices, list) and choices:
-        message = choices[0].get("message")
-        if isinstance(message, dict):
-            return message
-        raise ValueError("OpenRouter response choice is missing a message payload")
-
-    output = data.get("output")
-    if isinstance(output, list):
-        for item in output:
-            if item.get("type") != "message":
-                continue
-
-            message = {
-                "role": item.get("role", "assistant"),
-                "content": None,
-                "images": [],
-            }
-            text_parts: list[str] = []
-
-            for block in item.get("content", []):
-                if not isinstance(block, dict):
-                    continue
-
-                block_type = block.get("type")
-                text = block.get("text")
-                if block_type in {"output_text", "text"} and isinstance(text, str):
-                    text_parts.append(text)
-                    continue
-
-                if block_type in {"output_image", "image", "image_url"}:
-                    image_url = block.get("image_url")
-                    if isinstance(image_url, str):
-                        message["images"].append({"image_url": {"url": image_url}})
-                        continue
-                    if isinstance(image_url, dict):
-                        message["images"].append({"image_url": image_url})
-                        continue
-
-                    result = block.get("result")
-                    if isinstance(result, str):
-                        message["images"].append({"image_url": {"url": result}})
-
-            if text_parts:
-                message["content"] = "\n".join(text_parts)
-            return message
-
-    raise ValueError(
-        "Unexpected OpenRouter response shape; expected 'choices' or 'output'"
-    )
+    """The first choice's message from a chat-completions response."""
+    return data["choices"][0]["message"]
 
 
 def openrouter_message_text(data: dict) -> str:

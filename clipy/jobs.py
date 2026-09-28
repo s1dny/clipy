@@ -55,7 +55,7 @@ class JobRunner:
                         "Server restarted mid-job; check YouTube before retrying."
                     )
         self._save()
-        threading.Thread(target=self._loop, name="clipper-jobs", daemon=True).start()
+        threading.Thread(target=self._loop, name="clipy-jobs", daemon=True).start()
 
     def _save(self) -> None:
         with self._lock:
@@ -106,7 +106,7 @@ class JobRunner:
             job["started_at"] = datetime.now(UTC).isoformat()
             self._save()
         handler = _JobLog(job, self)
-        package_logger = logging.getLogger("clipper")
+        package_logger = logging.getLogger("clipy")
         package_logger.addHandler(handler)
         try:
             result = self.handlers[job["kind"]](job["args"])

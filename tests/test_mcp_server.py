@@ -14,11 +14,13 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+import httpx2
 import pytest
 import requests
 from mcp import Client
+from mcp.client.streamable_http import streamable_http_client
 
-SECRET = "s" * 40
+TOKEN = "s" * 40
 ROOT = Path(__file__).resolve().parent.parent
 
 CONFIG = """
@@ -81,16 +83,16 @@ def server(tmp_path_factory):
     port = _free_port()
     env = {
         **os.environ,
-        "CLIPPER_DATA_DIR": str(data),
-        "CLIPPER_CONFIG": str(config),
-        "CLIPPER_MCP_SECRET": SECRET,
+        "CLIPY_DATA_DIR": str(data),
+        "CLIPY_CONFIG": str(config),
+        "CLIPY_MCP_TOKEN": TOKEN,
         "OPENROUTER_API_KEY": "unused",
         "ASSEMBLYAI_API_KEY": "unused",
         "PORT": str(port),
         "HOST": "127.0.0.1",
     }
     proc = subprocess.Popen(
-        [sys.executable, "-m", "clipper.mcp_server"],
+        [sys.executable, "-m", "clipy.mcp_server"],
         cwd=data,
         env=env,
     )
@@ -111,9 +113,18 @@ def server(tmp_path_factory):
     proc.wait(timeout=10)
 
 
+def connect(base: str) -> Client:
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    return Client(
+        streamable_http_client(
+            f"{base}/mcp", http_client=httpx2.AsyncClient(headers=headers, timeout=60)
+        )
+    )
+
+
 def call(base: str, tool: str, args: dict | None = None):
     async def go():
-        async with Client(f"{base}/mcp/{SECRET}") as client:
+        async with connect(base) as client:
             return await client.call_tool(tool, args or {})
 
     return asyncio.run(go())
@@ -130,12 +141,14 @@ def data(result):
     return structured if structured is not None else json.loads(text(result))
 
 
-def test_endpoint_requires_the_secret_path(server):
+def test_endpoint_requires_the_token(server):
     base, _ = server
-    assert requests.post(f"{base}/mcp/wrong", timeout=5).status_code == 404
+    assert requests.post(f"{base}/mcp", timeout=5).status_code == 401
+    wrong = {"Authorization": "Bearer wrong"}
+    assert requests.post(f"{base}/mcp", headers=wrong, timeout=5).status_code == 401
 
     async def names():
-        async with Client(f"{base}/mcp/{SECRET}") as client:
+        async with connect(base) as client:
             return {tool.name for tool in (await client.list_tools()).tools}
 
     assert {
