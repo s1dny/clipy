@@ -3,16 +3,17 @@ import logging
 import os
 import shutil
 import sys
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-from .clips import annotate_clip, cut_clips, extract_clips
-from .common import load_or_compute, write_json_file
+from .clips import annotate_clip, extract_clips
+from .common import load_or_compute, read_json_file, write_json_file
 from .config import AppConfig, load_config
-from .download import download_video
+from .cutting import clips_to_cut, cut_clips
+from .download import download_audio, download_video
 from .logging_config import setup_logging
 from .paths import PROJECT_ROOT, ClipyPaths, data_root
 from .queue import remove_work_dir_entries, save_queue
@@ -23,7 +24,7 @@ from .upload import authorize
 logger = logging.getLogger(__name__)
 
 STEP_OUTPUTS: dict[int, list[str]] = {
-    1: ["video.mp4", "audio.mp3"],
+    1: ["audio.*", "video.*"],
     2: ["transcript.json", "sentences.json"],
     3: ["clips.json"],
     4: [],
@@ -126,9 +127,8 @@ def _build_pipeline_run(
 def _force_rerun_from_step(run: PipelineRun, paths: ClipyPaths) -> None:
     """Delete outputs from a step onward so downstream steps are recomputed."""
     for step in range(run.force_step or 0, 7):
-        for filename in STEP_OUTPUTS.get(step, []):
-            output_path = run.work_dir / filename
-            if output_path.exists():
+        for pattern in STEP_OUTPUTS.get(step, []):
+            for output_path in run.work_dir.glob(pattern):
                 output_path.unlink()
 
         clips_dir = run.work_dir / "clips"
@@ -146,16 +146,6 @@ def _force_rerun_from_step(run: PipelineRun, paths: ClipyPaths) -> None:
             remove_work_dir_entries(paths.queue_file, run.work_dir)
 
     logger.info("Forcing re-run from step %s.", run.force_step)
-
-
-def _maybe_download(run: PipelineRun) -> tuple[Path, Path]:
-    video_path = run.work_dir / "video.mp4"
-    audio_path = run.work_dir / "audio.mp3"
-    if video_path.exists() and audio_path.exists():
-        logger.info("[1/6] Downloading video and extracting audio")
-        logger.info("Skipping: video and audio already exist")
-        return video_path, audio_path
-    return download_video(run.url, run.work_dir, run.config.runtime.ffmpeg_path)
 
 
 def annotate_clips(clips: list[dict], sentences: list[dict], run: PipelineRun):
@@ -196,12 +186,40 @@ def run_pipeline(run: PipelineRun, paths: ClipyPaths) -> None:
 
     run.work_dir.mkdir(parents=True, exist_ok=True)
 
-    video_path, audio_path = _maybe_download(run)
+    audio = download_audio(run.url, run.work_dir)
+    # The video downloads alongside transcription and clip picking, and only
+    # if some clip still needs cutting.
+    clips_file = run.work_dir / "clips.json"
+    needs_video = not clips_file.exists() or clips_to_cut(
+        run.work_dir, read_json_file(clips_file)
+    )
+    pool = ThreadPoolExecutor(max_workers=1)
+    video = pool.submit(download_video, run.url, run.work_dir) if needs_video else None
+    try:
+        clips = _clips(run, audio, video)
+    finally:
+        pool.shutdown(cancel_futures=True)
+    clips = generate_thumbnails(
+        clips,
+        run.work_dir,
+        run.openrouter_key,
+        run.thumbnail_template,
+        run.config.channel,
+        run.config.models.image,
+        run.config.thumbnails,
+    )
+    save_queue(clips, paths.queue_file)
+
+    logger.info("Done: %s clips in %s", len(clips), run.work_dir / "clips")
+
+
+def _clips(run: PipelineRun, audio: Path, video: Future | None) -> list[dict]:
+    """Transcribe, pick and annotate clips, then cut them."""
 
     transcript = load_or_compute(
         run.work_dir / "transcript.json",
         transcribe_audio,
-        audio_path,
+        audio,
         run.assemblyai_key,
         run.config.models.speech,
         skip_message="[2/6] Transcribing audio with AssemblyAI... skipped: transcript already exists",
@@ -221,19 +239,13 @@ def run_pipeline(run: PipelineRun, paths: ClipyPaths) -> None:
         skip_message="[3/6] Extracting clip segments with LLM... skipped: clips already extracted",
     )
     clips = annotate_clips(clips, sentences, run)
-    clips = cut_clips(video_path, clips, run.work_dir, run.config.runtime.ffmpeg_path)
-    clips = generate_thumbnails(
+    return cut_clips(
+        video.result if video else None,
+        audio,
         clips,
         run.work_dir,
-        run.openrouter_key,
-        run.thumbnail_template,
-        run.config.channel,
-        run.config.models.image,
-        run.config.thumbnails,
+        run.config.runtime.ffmpeg_path,
     )
-    save_queue(clips, paths.queue_file)
-
-    logger.info("Done: %s clips in %s", len(clips), run.work_dir / "clips")
 
 
 def main() -> None:

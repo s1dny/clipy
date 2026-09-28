@@ -40,6 +40,7 @@ from . import matrix, reach
 from .cli import build_paths, load_app_config, make_run, run_pipeline
 from .common import extract_video_id, read_json_file, run_cmd, write_json_file
 from .config import PROMPT_KEYS, AppConfig
+from .download import downloaded
 from .jobs import JobRunner
 from .logging_config import setup_logging
 from .queue import item_id, load_queue
@@ -536,8 +537,9 @@ def _process_job(args: dict) -> str:
     run_pipeline(run, paths)
     # The clips are cut and the transcript is cached; the source media is only
     # disk usage now (re-running the source downloads it again).
-    for media in ("video.mp4", "audio.mp3"):
-        (run.work_dir / media).unlink(missing_ok=True)
+    for stem in ("audio", "video"):
+        if media := downloaded(run.work_dir, stem):
+            media.unlink()
     source = extract_video_id(args["url"])
     made = [i for i in _queue() if item_id(i).startswith(source)]
     return f"{len(made)} clips from {source} are in the queue."
@@ -644,9 +646,10 @@ async def sample_source(url: str, minutes_per_sample: int = 3) -> dict:
 async def process_source(url: str) -> dict:
     """Start turning a source video into clips in the background: download,
     transcribe, pick 8-20 minute clips with the clip prompt, cut them, draw
-    thumbnails, and add them to the queue as pending. Takes 20-90 minutes and
-    uses paid transcription and LLM calls. Nothing is
-    uploaded. Returns a job; follow it with wait_for_job."""
+    thumbnails, and add them to the queue as pending. Usually takes a few
+    minutes (longer for multi-hour sources) and uses paid transcription and
+    LLM calls. Nothing is uploaded. Returns a job; follow it with
+    wait_for_job."""
     extract_video_id(url)  # reject anything that is not a video URL
     return jobs.submit("process_source", {"url": url})
 

@@ -1,76 +1,60 @@
+"""Source downloads: the audio stream (for transcription) and the video
+stream (for cutting) are separate YouTube streams, fetched separately with
+yt-dlp's own downloader. Nothing is merged or re-encoded here.
+
+Video is H.264 at up to 1080p when YouTube has it, so clips can be cut by
+copying most of the stream instead of re-encoding it (see cutting.py).
+"""
+
 import logging
-import sys
 from pathlib import Path
 
-from .common import run_cmd
+import yt_dlp
 
 logger = logging.getLogger(__name__)
 
+AUDIO_FORMAT = "bestaudio"
+VIDEO_FORMAT = "bv*[vcodec^=avc1][height<=1080]/bv*[height<=1080]/bv*"
 
-class MediaCommandError(RuntimeError):
-    """Raised when yt-dlp or FFmpeg fails."""
+
+def downloaded(work_dir: Path, stem: str) -> Path | None:
+    """The finished audio.* or video.* file in work_dir, if there is one.
+    yt-dlp renames a download into place only once it is complete."""
+    return next(
+        (
+            path
+            for path in sorted(work_dir.glob(f"{stem}.*"))
+            if path.suffix not in {".part", ".ytdl"} and ".part" not in path.suffixes
+        ),
+        None,
+    )
 
 
-def download_video(
-    youtube_url: str, work_dir: Path, ffmpeg_path: str
-) -> tuple[Path, Path]:
-    """Download video from YouTube and extract audio with ffmpeg."""
-    logger.info("[1/6] Downloading video and extracting audio...")
-
+def _download(url: str, work_dir: Path, stem: str, fmt: str) -> Path:
+    existing = downloaded(work_dir, stem)
+    if existing:
+        logger.info("Skipping %s download: %s already exists", stem, existing.name)
+        return existing
     work_dir.mkdir(parents=True, exist_ok=True)
+    options = {
+        "format": fmt,
+        "outtmpl": str(work_dir / f"{stem}.%(ext)s"),
+        "quiet": True,
+        "no_warnings": True,
+        "noprogress": True,
+    }
+    with yt_dlp.YoutubeDL(options) as ydl:
+        info = ydl.extract_info(url, download=True)
+    path = Path(info["requested_downloads"][0]["filepath"])
+    logger.info("Downloaded %s: %s", stem, path.name)
+    return path
 
-    # Download video with audio
-    video_path = work_dir / "video.mp4"
-    code, _out, err = run_cmd(
-        [
-            *[sys.executable, "-m", "yt_dlp"],
-            "-f",
-            "bv*+ba/b",
-            "-o",
-            str(video_path),
-            "--merge-output-format",
-            "mp4",
-            "--audio-quality",
-            "0",
-            youtube_url,
-        ]
-    )
-    if code != 0:
-        logger.error("Error downloading video: %s", err)
-        raise MediaCommandError(f"yt-dlp video failed: {err}")
 
-    # Find the actual video file (yt-dlp may modify filename)
-    if not video_path.exists():
-        video_files = list(work_dir.glob("video.*"))
-        if video_files:
-            video_path = video_files[0]
-        else:
-            raise FileNotFoundError(f"No video file found in {work_dir}")
+def download_audio(url: str, work_dir: Path) -> Path:
+    logger.info("[1/6] Downloading audio...")
+    return _download(url, work_dir, "audio", AUDIO_FORMAT)
 
-    # Extract audio with ffmpeg
-    audio_path = work_dir / "audio.mp3"
-    # Written beside the target and renamed, so a resumed run never mistakes
-    # a half-written file for finished audio.
-    partial_audio = work_dir / "audio.partial.mp3"
-    code, _out, err = run_cmd(
-        [
-            ffmpeg_path,
-            "-y",
-            "-i",
-            str(video_path),
-            "-vn",
-            "-acodec",
-            "libmp3lame",
-            "-q:a",
-            "2",
-            str(partial_audio),
-        ]
-    )
-    if code != 0:
-        logger.error("Error extracting audio: %s", err)
-        raise MediaCommandError(f"ffmpeg audio extraction failed: {err}")
-    partial_audio.replace(audio_path)
 
-    logger.info("Video: %s", video_path)
-    logger.info("Audio: %s", audio_path)
-    return video_path, audio_path
+def download_video(url: str, work_dir: Path) -> Path:
+    logger.info("Downloading video (in the background)...")
+    return _download(url, work_dir, "video", VIDEO_FORMAT)

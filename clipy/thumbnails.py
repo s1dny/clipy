@@ -9,9 +9,9 @@ import numpy as np
 import requests
 from PIL import Image
 
-from .clips import clip_folder_name
 from .common import openrouter_message_images, openrouter_request
 from .config import ChannelConfig, ThumbnailConfig
+from .cutting import clip_folder_name
 
 logger = logging.getLogger(__name__)
 IMAGE_TIMEOUT_SECONDS = 120

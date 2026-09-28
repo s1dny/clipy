@@ -37,11 +37,13 @@ cannot do.
   background clipping and upload jobs, clip and live-video editing, prompt
   overrides, a strategy notebook that is the agent's memory between runs, and
   the Matrix report.
-- **The pipeline** downloads a source, transcribes it with speaker labels,
-  has an LLM pick 8-20 minute clips, writes each clip a summary and YouTube
-  chapters, cuts them with ffmpeg, draws thumbnails onto the channel's
-  template, and queues them. Every step is cached, so an interrupted job
-  resumes.
+- **The pipeline** downloads a source's audio stream and transcribes it
+  with speaker labels while the video stream downloads alongside, has an LLM
+  pick 8-20 minute clips, writes each clip a summary and YouTube chapters,
+  smart-cuts them (only the few frames before the first keyframe are
+  re-encoded; the rest of the video is copied, so a clip takes seconds and is
+  frame-accurate), draws thumbnails onto the channel's template, and queues
+  them. Every step is cached, so an interrupted job resumes.
 - **The report**: the agent sends one Markdown report a day with the
   `send_report` tool (earnings, top videos, changes, anything to do). When
   the run ends, [`agent/run.sh`](agent/run.sh) edits that message to append
@@ -149,9 +151,10 @@ clipy/
   mcp_server.py      MCP tools the agent uses to run the channel
   jobs.py            Background job runner (clipping, uploads)
   cli.py             Pipeline orchestration and the clipy CLI
-  download.py        yt-dlp download and audio extraction
+  download.py        yt-dlp downloads of the separate audio and video streams
   transcription.py   AssemblyAI transcription with speaker labels
-  clips.py           LLM clip picking, summaries and chapters, ffmpeg cutting
+  clips.py           LLM clip picking, summaries and chapters
+  cutting.py         Frame-accurate smart cuts with ffmpeg
   thumbnails.py      Illustration generation and thumbnail compositing
   upload.py          YouTube auth and uploads
   reach.py           Impressions and click-through from reach reports
