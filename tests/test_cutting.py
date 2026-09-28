@@ -39,6 +39,9 @@ def sources(tmp_path_factory):
            "-sc_threshold", "0", "-pix_fmt", "yuv420p", str(tmp / "h264.mp4"))  # fmt: skip
     ffmpeg(*frames, "-c:v", "libvpx-vp9", "-deadline", "realtime", "-g", "300",
            str(tmp / "vp9.webm"))  # fmt: skip
+    # A download cut short: the video stops at 15s, the audio runs on.
+    ffmpeg("-i", str(tmp / "h264.mp4"), "-t", "15", "-c", "copy",
+           str(tmp / "truncated.mp4"))  # fmt: skip
     ffmpeg("-f", "lavfi", "-i", "sine=frequency=440:duration=30",
            "-c:a", "libopus", str(tmp / "audio.webm"))  # fmt: skip
     return tmp
@@ -80,6 +83,15 @@ def test_failed_cut_leaves_nothing(sources, tmp_path):
     clip = tmp_path / "video.mp4"
     assert not cut_clip(
         tmp_path / "missing.mp4", sources / "audio.webm", 0, 5_000, clip, FFMPEG
+    )
+    assert not clip.exists()
+    assert not list(tmp_path.glob("*.partial.*"))
+
+
+def test_a_source_cut_short_fails_the_clip(sources, tmp_path):
+    clip = tmp_path / "video.mp4"
+    assert not cut_clip(
+        sources / "truncated.mp4", sources / "audio.webm", 7_300, 20_000, clip, FFMPEG
     )
     assert not clip.exists()
     assert not list(tmp_path.glob("*.partial.*"))

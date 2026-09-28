@@ -19,6 +19,7 @@ from .common import run_cmd
 logger = logging.getLogger(__name__)
 
 KEYFRAME_SEARCH_SECONDS = 30
+MAX_SHORTFALL_SECONDS = 1.0
 X264 = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p"]
 AAC = ["-c:a", "aac", "-b:a", "192k"]
 
@@ -47,6 +48,17 @@ def _next_keyframe(ffprobe: str, video: Path, at: float) -> float | None:
         if value and float(value) >= at - 0.001:
             return float(value)
     return None
+
+
+def _duration(ffprobe: str, media: Path) -> float:
+    _code, out, _err = run_cmd(
+        [ffprobe, "-v", "error", "-show_entries", "format=duration",
+         "-of", "csv=p=0", str(media)]
+    )  # fmt: skip
+    try:
+        return float(out.strip())
+    except ValueError:
+        return 0.0
 
 
 def _run(cmd: list[str]) -> None:
@@ -108,6 +120,13 @@ def cut_clip(
                 _run([ffmpeg_path, "-v", "error", "-y", "-ss", str(start),
                       "-t", str(end - start), "-i", str(video), *audio_input,
                       *X264, *finish])  # fmt: skip
+        # -shortest ends the clip early when the source video does (a
+        # truncated download), so a short clip means a broken source.
+        length = _duration(ffprobe, partial)
+        if length < end - start - MAX_SHORTFALL_SECONDS:
+            raise RuntimeError(
+                f"clip is {length:.1f}s, not {end - start:.1f}s; the source is cut short"
+            )
     except RuntimeError as exc:
         logger.error("Cutting failed: %s", exc)
         partial.unlink(missing_ok=True)

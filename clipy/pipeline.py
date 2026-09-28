@@ -83,6 +83,19 @@ def process_source(channel: Channel, url: str, speaker: str) -> int:
         clips = cut_clips(
             video.result if video else None, audio, clips, source_dir, config.ffmpeg
         )
+        if video and any(clip["clip_path"] is None for clip in clips):
+            # A corrupt or truncated download breaks every clip past the
+            # damage; download it again once and cut what failed.
+            logger.warning("Some clips failed to cut; downloading the video again")
+            if media := downloaded(source_dir, "video"):
+                media.unlink()
+            clips = cut_clips(
+                lambda: download_video(url, source_dir),
+                audio,
+                clips,
+                source_dir,
+                config.ffmpeg,
+            )
     clips = thumbnails.draw_all(clips, source_dir, config)
     save_queue(clips, channel.queue_file)
 
