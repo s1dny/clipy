@@ -3,23 +3,20 @@ FROM denoland/deno:bin AS deno
 
 FROM debian:trixie-slim AS codex
 # The agent (agent/run.sh) is Codex CLI on a ChatGPT login.
-# Codex runs tool calls through codex-code-mode-host and sandboxes commands with
-# bwrap; both ship as separate release assets and must sit beside codex.
+# Codex runs tool calls through codex-code-mode-host, which ships as a separate
+# release asset and must sit beside codex.
 ARG CODEX_VERSION=0.158.0
 ARG CODEX_RELEASE=https://github.com/openai/codex/releases/download/rust-v${CODEX_VERSION}
 ADD ${CODEX_RELEASE}/codex-x86_64-unknown-linux-musl.tar.gz /codex.tgz
 ADD ${CODEX_RELEASE}/codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz /host.tgz
-ADD ${CODEX_RELEASE}/bwrap-x86_64-unknown-linux-musl.tar.gz /bwrap.tgz
 RUN printf '%s  %s\n' \
         af9f5aa6e6662accf9d707cef0d9ca083880a173a9c2b6c22947edb7830e5778 /codex.tgz \
         5455c64be4ba371444710895aff6d74d653985a3bfc454a8b7fe42d6e6d11e3d /host.tgz \
-        9ba223ef125fe449c64b2cf8ce66446a99cafd15ac4d88cb07dc9ef04363e215 /bwrap.tgz \
         | sha256sum -c - \
     && mkdir /out \
-    && for f in /codex.tgz /host.tgz /bwrap.tgz; do tar xzf "$f" -C /out; done \
+    && for f in /codex.tgz /host.tgz; do tar xzf "$f" -C /out; done \
     && mv /out/codex-x86_64-unknown-linux-musl /out/codex \
-    && mv /out/codex-code-mode-host-x86_64-unknown-linux-musl /out/codex-code-mode-host \
-    && mv /out/bwrap-x86_64-unknown-linux-musl /out/bwrap
+    && mv /out/codex-code-mode-host-x86_64-unknown-linux-musl /out/codex-code-mode-host
 
 FROM python:3.14-slim-trixie
 RUN apt-get update \

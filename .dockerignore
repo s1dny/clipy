@@ -1,7 +1,6 @@
 .venv
 .git
 channels
-*.psd
 .env
 config.toml
 client_secrets.json
