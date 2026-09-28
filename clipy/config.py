@@ -151,8 +151,8 @@ def load_config(
             ffmpeg_path=_value(runtime, "ffmpeg_path", str, "ffmpeg"),
         ),
         models=ModelsConfig(
-            clip=_value(models, "clip", str, "google/gemini-3.7-flash"),
-            image=_value(models, "image", str, "google/gemini-3.1-flash-image"),
+            clip=_value(models, "clip", str, "z-ai/glm-5.3-flash"),
+            image=_value(models, "image", str, "bytedance-seed/seedream-5-0-lite"),
             speech=_value(models, "speech", str, "universal-3-5-pro"),
         ),
         thumbnails=ThumbnailConfig(

@@ -2,8 +2,8 @@
 ffmpeg_path = "/opt/homebrew/bin/ffmpeg"
 
 [models]
-clip = "meta/muse-spark-1.3-contributor"
-image = "google/gemini-3.1-flash-image"
+clip = "z-ai/glm-5.3-flash"
+image = "bytedance-seed/seedream-5-0-lite"
 speech = "universal-3-5-pro"
 
 [thumbnails]

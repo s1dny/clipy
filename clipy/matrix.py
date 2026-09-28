@@ -20,9 +20,10 @@ from pathlib import Path
 
 import markdown
 
-DATA_DIR = Path(os.environ.get("CLIPY_DATA_DIR", "/data"))
-ROOM_FILE = DATA_DIR / "matrix-room"
-LAST_REPORT_FILE = DATA_DIR / "last-report.json"
+from .paths import data_root
+
+ROOM_FILE = data_root() / "matrix-room"
+LAST_REPORT_FILE = data_root() / "last-report.json"
 
 
 def configured() -> bool:

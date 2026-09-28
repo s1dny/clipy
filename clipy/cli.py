@@ -14,7 +14,7 @@ from .common import load_or_compute, write_json_file
 from .config import AppConfig, load_config
 from .download import download_video
 from .logging_config import setup_logging
-from .paths import ClipyPaths
+from .paths import PROJECT_ROOT, ClipyPaths, data_root
 from .queue import remove_work_dir_entries, save_queue
 from .thumbnails import generate_thumbnails
 from .transcription import build_sentence_transcript, transcribe_audio
@@ -73,11 +73,9 @@ def _validate_channel(parser: argparse.ArgumentParser, channel: str) -> str:
 
 
 def build_paths(channel: str) -> ClipyPaths:
-    """Channel state lives under $CLIPY_DATA_DIR/channels, defaulting to the repo."""
-    project_root = Path(__file__).resolve().parent.parent
-    data_root = Path(os.environ.get("CLIPY_DATA_DIR") or project_root)
-    work_root = data_root / "channels" / channel
-    return ClipyPaths(project_root=project_root, work_root=work_root)
+    return ClipyPaths(
+        project_root=PROJECT_ROOT, work_root=data_root() / "channels" / channel
+    )
 
 
 def load_app_config(paths: ClipyPaths, channel: str) -> AppConfig:

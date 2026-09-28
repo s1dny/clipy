@@ -17,11 +17,6 @@ _THEME = Theme(
 _CONSOLE = Console(theme=_THEME)
 
 
-def get_console() -> Console:
-    """Return the shared Rich console used by logs and progress displays."""
-    return _CONSOLE
-
-
 def create_progress(*columns, transient: bool = False) -> Progress:
     """Create a Rich progress instance bound to the shared console."""
     return Progress(*columns, console=_CONSOLE, transient=transient, expand=True)

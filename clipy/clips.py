@@ -10,6 +10,11 @@ logger = logging.getLogger(__name__)
 CLIP_TIMEOUT_SECONDS = 3600
 
 
+def json_object(text: str) -> dict:
+    """The JSON object in a model reply, ignoring any text around it."""
+    return json.loads(text[text.index("{") : text.rindex("}") + 1])
+
+
 def extract_clips(
     sentences: list[dict],
     api_key: str,
@@ -23,7 +28,6 @@ def extract_clips(
 
     prompt = f"{prompt_template}\n\nTranscript:\n{transcript_text}"
 
-    logger.debug("Using model: %s", model)
     data = openrouter_request(
         api_key,
         {
@@ -31,37 +35,16 @@ def extract_clips(
             "messages": [
                 {
                     "role": "system",
-                    "content": "You are an expert video editor. Return ONLY valid JSON, no markdown.",
+                    "content": "You are an expert video editor. Return only JSON.",
                 },
                 {"role": "user", "content": prompt},
             ],
+            "response_format": {"type": "json_object"},
             "provider": {"sort": "price"},
-            "thinking": {"type": "enabled", "budget_tokens": 100000},
         },
         CLIP_TIMEOUT_SECONDS,
     )
-
-    content = openrouter_message_text(data)
-
-    try:
-        clips = json.loads(content)["clips"]
-    except json.JSONDecodeError, KeyError:
-        logger.warning("JSON parse error, attempting to fix...")
-        # Try to extract JSON from markdown code blocks
-        json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
-        if json_match:
-            clips = json.loads(json_match.group(1))["clips"]
-        else:
-            # Try to find JSON object in the response
-            json_match = re.search(
-                r'\{[^{}]*"clips"\s*:\s*\[.*?\]\s*\}', content, re.DOTALL
-            )
-            if json_match:
-                clips = json.loads(json_match.group(0))["clips"]
-            else:
-                logger.error("Could not parse LLM response")
-                logger.debug("Raw content: %s...", content[:500])
-                raise
+    clips = json_object(openrouter_message_text(data))["clips"]
 
     logger.info("Found %s clips:", len(clips))
     for i, clip in enumerate(clips):
@@ -119,8 +102,7 @@ def annotate_clip(
         },
         ANNOTATE_TIMEOUT_SECONDS,
     )
-    text = openrouter_message_text(data)
-    result = json.loads(text[text.index("{") : text.rindex("}") + 1])
+    result = json_object(openrouter_message_text(data))
     return {
         "summary": result["summary"].strip(),
         "chapters": valid_chapters(
