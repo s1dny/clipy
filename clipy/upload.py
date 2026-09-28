@@ -118,7 +118,6 @@ def upload_video(youtube, item: dict, description_template: str, category_id: st
     """Upload a queued clip with its thumbnail: private and scheduled when the
     item has `publish_at`, otherwise public straight away. Records the video
     id on the item; raises on failure."""
-    from googleapiclient.errors import HttpError
     from googleapiclient.http import MediaFileUpload
 
     clip_path = Path(item["clip_path"])
@@ -151,10 +150,24 @@ def upload_video(youtube, item: dict, description_template: str, category_id: st
     item["youtube_url"] = f"https://youtube.com/watch?v={response['id']}"
     logger.info("Uploaded %s", item["youtube_url"])
 
+    set_thumbnail(youtube, item)
+
+
+def set_thumbnail(youtube, item: dict) -> bool:
+    """Set an uploaded clip's thumbnail. On failure (YouTube rate-limits
+    thumbnails per account) the item is marked thumbnail_pending, which the
+    server retries every hour."""
+    from googleapiclient.errors import HttpError
+    from googleapiclient.http import MediaFileUpload
+
     try:
         youtube.thumbnails().set(
-            videoId=response["id"],
+            videoId=item["youtube_id"],
             media_body=MediaFileUpload(item["thumbnail_path"], mimetype="image/jpeg"),
         ).execute()
     except (HttpError, OSError) as exc:
-        logger.warning("Could not set thumbnail: %s", exc)
+        logger.warning("Could not set thumbnail (will retry): %s", exc)
+        item["thumbnail_pending"] = True
+        return False
+    item.pop("thumbnail_pending", None)
+    return True

@@ -13,6 +13,7 @@ import hmac
 import logging
 import os
 import re
+import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -39,10 +40,11 @@ from .jobs import JobRunner
 from .logging_config import setup_logging
 from .pipeline import process_source as run_pipeline
 from .queue import item_id, load_queue
-from .upload import upload_video
+from .upload import set_thumbnail, upload_video
 
 logger = logging.getLogger(__name__)
 
+THUMBNAIL_RETRY_SECONDS = 3600
 LOCAL_TZ = ZoneInfo(os.environ.get("CLIPY_TIMEZONE", "Australia/Sydney"))
 
 READ = ToolAnnotations(readOnlyHint=True, openWorldHint=True)
@@ -101,6 +103,7 @@ def _queue_view(item: dict) -> dict:
         "youtube_url": item.get("youtube_url"),
         "publish_at": item.get("publish_at"),
         "discard_reason": item.get("discard_reason"),
+        "thumbnail_pending": item.get("thumbnail_pending", False),
     }
 
 
@@ -123,6 +126,36 @@ def _publish_job(name: str, args: dict) -> str:
     write_json_file(channel.queue_file, queue)
     Path(item["clip_path"]).unlink(missing_ok=True)  # YouTube has it now
     return item["youtube_url"]
+
+
+def _thumbnails_job(name: str, _args: dict) -> str:
+    """Retry the thumbnails YouTube refused at upload (usually its per-account
+    rate limit), stopping at the first refusal."""
+    channel = Channel(name)
+    queue = load_queue(channel.queue_file)
+    pending = [i for i in queue if i.get("thumbnail_pending") and i.get("youtube_id")]
+    youtube = channel.youtube()
+    done = 0
+    for item in pending:
+        if not set_thumbnail(youtube, item):
+            break
+        done += 1
+    write_json_file(channel.queue_file, queue)
+    return f"Set {done} of {len(pending)} pending thumbnails."
+
+
+def _retry_thumbnails_forever() -> None:
+    while True:
+        time.sleep(THUMBNAIL_RETRY_SECONDS)
+        for channel in all_channels():
+            try:
+                queue = load_queue(channel.queue_file)
+                if any(i.get("thumbnail_pending") for i in queue) and not jobs.active(
+                    channel.name, "thumbnails"
+                ):
+                    jobs.submit(channel.name, "thumbnails", {})
+            except Exception as exc:  # noqa: BLE001 - try again next hour
+                logger.warning("Thumbnail retry for %s: %s", channel.name, exc)
 
 
 def _process_job(name: str, args: dict) -> str:
@@ -583,8 +616,13 @@ def main() -> None:
     (data_root() / "headshots").mkdir(exist_ok=True)
     jobs = JobRunner(
         data_root() / "jobs.json",
-        {"process_source": _process_job, "publish": _publish_job},
+        {
+            "process_source": _process_job,
+            "publish": _publish_job,
+            "thumbnails": _thumbnails_job,
+        },
     )
+    threading.Thread(target=_retry_thumbnails_forever, daemon=True).start()
 
     app = mcp.streamable_http_app(
         streamable_http_path="/mcp",
