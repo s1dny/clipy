@@ -36,7 +36,7 @@ from starlette.responses import PlainTextResponse
 from starlette.routing import Route
 from yt_dlp.utils import download_range_func
 
-from . import costs, reach
+from . import costs, matrix, reach
 from .cli import build_paths, load_app_config, make_run, run_pipeline
 from .common import extract_video_id, read_json_file, run_cmd, write_json_file
 from .config import PROMPT_KEYS, AppConfig
@@ -918,6 +918,16 @@ async def update_prompts(
         raise ValueError("illustration_prompt_template needs {prompt}.")
     write_json_file(paths.prompt_overrides_file, overrides)
     return await get_prompts()
+
+
+@tool(WRITE)
+async def send_report(message: str) -> dict:
+    """Send the daily report to the channel owner over Matrix. Markdown
+    renders (headings, bold, lists, links). The run's duration and token stats
+    are appended automatically when the run ends."""
+    if not matrix.configured():
+        raise ValueError("Matrix is not configured (MATRIX_ACCESS_TOKEN is unset).")
+    return {"event_id": await _sync(matrix.send, message)}
 
 
 @tool(READ)

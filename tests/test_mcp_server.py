@@ -86,6 +86,7 @@ def server(tmp_path_factory):
         "CLIPY_DATA_DIR": str(data),
         "CLIPY_CONFIG": str(config),
         "CLIPY_MCP_TOKEN": TOKEN,
+        "MATRIX_ACCESS_TOKEN": "",
         "OPENROUTER_API_KEY": "unused",
         "ASSEMBLYAI_API_KEY": "unused",
         "PORT": str(port),
@@ -218,3 +219,10 @@ def test_waiting_on_an_unknown_job_says_so(server):
     result = call(base, "wait_for_job", {"job_id": "nope", "max_minutes": 1})
     assert result.is_error
     assert "No job 'nope'" in text(result)
+
+
+def test_report_needs_matrix(server):
+    base, _ = server
+    result = call(base, "send_report", {"message": "## Today\n\n- nothing"})
+    assert result.is_error
+    assert "Matrix is not configured" in text(result)
