@@ -24,9 +24,6 @@ if [ ! -s "$CODEX_HOME/auth.json" ]; then
   echo "No ChatGPT login in $CODEX_HOME; run: codex login --device-auth" >&2
   exit 1
 fi
-# Speaker headshots, which the agent finds and crops itself.
-mkdir -p "$CLIPY_DATA_DIR/headshots"
-
 run_channel() {
   channel=$1
   work=/tmp/agent/$channel
@@ -35,8 +32,10 @@ run_channel() {
   started=$(date +%s)
   status=0
   echo "=== $channel"
-  # The sandbox may reach the network (to download photos) and write only its
-  # scratch directory and the headshots.
+  # Codex's own sandbox (bwrap) cannot create namespaces in the pod, so the
+  # container is the sandbox: it mounts the data directory read-only except
+  # for the Codex login and the headshots, which the agent downloads and crops
+  # itself.
   { cat "$CLIPY_AGENT_DIR/prompt.md" "$CLIPY_AGENT_DIR/channels/$channel.md"
     if [ -n "${CLIPY_AGENT_NOTE:-}" ]; then
       printf '\nOne-off instruction from the owner for this run (it overrides the rules above where they conflict):\n%s\n' "$CLIPY_AGENT_NOTE"
@@ -46,13 +45,10 @@ run_channel() {
       --skip-git-repo-check \
       --ephemeral \
       --cd "$work" \
-      --sandbox workspace-write \
-      --add-dir "$CLIPY_DATA_DIR/headshots" \
+      --dangerously-bypass-approvals-and-sandbox \
       --model "${CODEX_MODEL:-gpt-6-sol}" \
       -c "model_reasoning_effort=\"${CODEX_REASONING:-medium}\"" \
-      -c 'approval_policy="never"' \
       -c 'cli_auth_credentials_store="file"' \
-      -c 'sandbox_workspace_write.network_access=true' \
       -c 'web_search="live"' \
       -c "mcp_servers.clipy.url=\"$CLIPY_MCP_URL/$channel\"" \
       -c 'mcp_servers.clipy.bearer_token_env_var="CLIPY_MCP_TOKEN"' \

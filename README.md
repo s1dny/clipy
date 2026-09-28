@@ -43,8 +43,9 @@ API cannot do.
   [`agent/channels/<channel>.md`](agent/channels): its goal, who may speak,
   where sources come from, how to experiment, and what the owner has to do.
   Changing a policy means editing the prompt; the server enforces none of it.
-  Codex has live web search, and its sandbox may reach the network and write
-  to the shared headshots directory.
+  Codex has live web search and runs commands without its own sandbox; the
+  agent pod is the sandbox, with the data directory mounted read-only except
+  for the Codex login and the shared headshots.
 - **The MCP server** (`clipy-mcp`) is mechanism only, and serves every
   channel in `config.toml` at `/mcp/<channel>`. Its tools cover analytics
   (ranked by revenue or watch hours), thumbnail impressions and click-through
@@ -61,7 +62,7 @@ API cannot do.
   illustration of the clip's idea from the image model. The picture is the
   channel's fixed template (`thumbnails/blow.jpg`) or, on the open channels,
   the clip speaker's headshot. The agent finds each headshot with web search,
-  crops it to a 2:3 portrait with image tools in its sandbox, and saves it to
+  crops it to a 2:3 portrait with Python, and saves it to
   `headshots/<speaker-name>.jpg` in the data directory, where every channel
   shares it.
 - **The report**: the agent sends one Markdown report per channel a day with

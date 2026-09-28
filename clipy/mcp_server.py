@@ -578,6 +578,8 @@ def main() -> None:
     for channel in all_channels():  # fail fast on a broken config.toml
         channel.config()
         channel.dir.mkdir(parents=True, exist_ok=True)
+    # The agent writes speaker headshots here (its only writable data).
+    (data_root() / "headshots").mkdir(exist_ok=True)
     jobs = JobRunner(
         data_root() / "jobs.json",
         {"process_source": _process_job, "publish": _publish_job},
