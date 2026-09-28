@@ -1,6 +1,5 @@
 import logging
 import os
-import sys
 from pathlib import Path
 
 from .clips import chapters_text
@@ -20,28 +19,36 @@ class YouTubeAuthError(RuntimeError):
     """Raised when there is no usable token and no one to consent interactively."""
 
 
-def _client_secrets_path(project_root: Path) -> Path:
-    configured = os.environ.get("YOUTUBE_CLIENT_SECRETS")
-    return Path(configured) if configured else project_root / "client_secrets.json"
-
-
-def authorize(token_path: Path, project_root: Path) -> None:
-    """Run the OAuth consent flow in a browser and cache the token."""
+def authorize(token_path: Path, handle: str) -> None:
+    """Sign a channel in to YouTube: print a consent link, wait for Google's
+    redirect to localhost, and keep the token only if it is for `handle`."""
     from google_auth_oauthlib.flow import InstalledAppFlow
+    from googleapiclient.discovery import build
 
-    client_secrets_path = _client_secrets_path(project_root)
-    if not client_secrets_path.exists():
-        logger.error("YouTube client secrets not found at %s", client_secrets_path)
-        logger.error("Download OAuth 2.0 credentials from Google Cloud Console")
-        logger.error("and save as client_secrets.json in the project root.")
-        sys.exit(1)
-    flow = InstalledAppFlow.from_client_secrets_file(
-        str(client_secrets_path), YOUTUBE_SCOPES
+    secrets = Path(os.environ.get("YOUTUBE_CLIENT_SECRETS", "client_secrets.json"))
+    if not secrets.exists():
+        raise YouTubeAuthError(
+            f"No OAuth client at {secrets}; download one from Google Cloud Console."
+        )
+    flow = InstalledAppFlow.from_client_secrets_file(str(secrets), YOUTUBE_SCOPES)
+    creds = flow.run_local_server(
+        port=0,
+        open_browser=False,
+        prompt="consent",
+        authorization_prompt_message=f"Sign in as {handle}: {{url}}",
     )
-    creds = flow.run_local_server(port=0, prompt="consent")
+    youtube = build("youtube", "v3", credentials=creds, cache_discovery=False)
+    mine = youtube.channels().list(part="snippet", mine=True).execute()["items"]
+    signed_in = mine[0]["snippet"].get("customUrl", "") if mine else ""
+    if signed_in.lower() != handle.lower():
+        raise YouTubeAuthError(
+            f"Signed in as {signed_in or 'no channel'}, not {handle}; "
+            "pick that channel's brand account."
+        )
     token_path.parent.mkdir(parents=True, exist_ok=True)
     token_path.write_text(creds.to_json(), encoding="utf-8")
-    logger.info("Saved YouTube token to %s", token_path)
+    token_path.chmod(0o600)
+    logger.info("Saved %s's YouTube token to %s", handle, token_path)
 
 
 def get_credentials(token_path: Path):
@@ -50,29 +57,26 @@ def get_credentials(token_path: Path):
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
 
-    seed = os.environ.get("YOUTUBE_TOKEN_JSON")
-    if not token_path.exists() and seed:
-        token_path.parent.mkdir(parents=True, exist_ok=True)
-        token_path.write_text(seed, encoding="utf-8")
-
     if not token_path.exists():
-        raise YouTubeAuthError(f"No YouTube token at {token_path}; run 'auth'.")
+        raise YouTubeAuthError(f"No YouTube token at {token_path}; run clipy auth.")
 
     creds = Credentials.from_authorized_user_file(str(token_path))
     missing = set(YOUTUBE_SCOPES) - set(creds.scopes or [])
     if missing:
         raise YouTubeAuthError(
-            f"YouTube token lacks scopes {sorted(missing)}; run 'auth' again."
+            f"YouTube token lacks scopes {sorted(missing)}; run clipy auth again."
         )
 
     if not creds.valid:
         if not creds.refresh_token:
-            raise YouTubeAuthError("YouTube token has no refresh token; run 'auth'.")
+            raise YouTubeAuthError(
+                "YouTube token has no refresh token; run clipy auth."
+            )
         try:
             creds.refresh(Request())
         except RefreshError as exc:
             raise YouTubeAuthError(
-                f"YouTube token refresh failed ({exc}); run 'auth' again."
+                f"YouTube token refresh failed ({exc}); run clipy auth again."
             ) from exc
         token_path.write_text(creds.to_json(), encoding="utf-8")
 

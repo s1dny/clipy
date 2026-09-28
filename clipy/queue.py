@@ -29,10 +29,12 @@ def save_queue(clips: list[dict], queue_file: Path) -> None:
             if clip.get("thumbnail_path"):
                 existing["thumbnail_path"] = clip["thumbnail_path"]
             existing.setdefault("chapters", clip.get("chapters", []))
+            existing.setdefault("speaker", clip.get("speaker"))
             continue
 
         item = {
             "title": clip["title"],
+            "speaker": clip.get("speaker"),
             "description": clip["description"],
             "clip_path": clip_path,
             "thumbnail_path": clip.get("thumbnail_path"),
@@ -57,13 +59,3 @@ def item_id(item: dict) -> str:
     parts = Path(item["clip_path"]).parts
     clips_idx = parts.index("clips")
     return f"{parts[clips_idx - 1]}:{parts[clips_idx + 1][:2]}"
-
-
-def remove_work_dir_entries(queue_file: Path, work_dir: Path) -> None:
-    """Remove queue entries produced by a specific work directory."""
-    queue = [
-        item
-        for item in load_queue(queue_file)
-        if not item.get("clip_path", "").startswith(str(work_dir))
-    ]
-    write_json_file(queue_file, queue)

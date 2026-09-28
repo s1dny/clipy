@@ -1,273 +1,46 @@
+"""clipy auth CHANNEL             sign a channel in to YouTube
+clipy process CHANNEL URL      turn a source into queued clips by hand"""
+
 import argparse
 import logging
-import os
-import shutil
 import sys
-from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass
-from pathlib import Path
 
 from dotenv import load_dotenv
 
-from .clips import annotate_clip, extract_clips
-from .common import load_or_compute, read_json_file, write_json_file
-from .config import AppConfig, load_config
-from .cutting import clips_to_cut, cut_clips
-from .download import download_audio, download_video
+from .channel import PROJECT_ROOT, Channel, all_channels
 from .logging_config import setup_logging
-from .paths import PROJECT_ROOT, ClipyPaths, data_root
-from .queue import remove_work_dir_entries, save_queue
-from .thumbnails import generate_thumbnails
-from .transcription import build_sentence_transcript, transcribe_audio
+from .pipeline import process_source
 from .upload import authorize
 
 logger = logging.getLogger(__name__)
 
-STEP_OUTPUTS: dict[int, list[str]] = {
-    1: ["audio.*", "video.*"],
-    2: ["transcript.json", "sentences.json"],
-    3: ["clips.json"],
-    4: [],
-    5: [],
-    6: [],
-}
-
-
-@dataclass(frozen=True)
-class PipelineRun:
-    url: str
-    work_dir: Path
-    thumbnail_template: Path
-    config: AppConfig
-    assemblyai_key: str
-    openrouter_key: str
-    force_step: int | None
-
-
-def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="YouTube Clip Automation")
-    parser.add_argument(
-        "url",
-        nargs="?",
-        default=None,
-        help="YouTube video URL to clip, or 'auth' to authorize YouTube",
-    )
-    parser.add_argument(
-        "--step",
-        type=int,
-        choices=range(1, 7),
-        metavar="N",
-        help="Force restart from step N (1=download, 2=transcribe, 3=extract clips, 4=cut clips, 5=generate thumbnails, 6=save queue)",
-    )
-    parser.add_argument(
-        "--channel",
-        required=True,
-        help="Channel directory name under ./channels to use as the work root.",
-    )
-    return parser
-
-
-def _validate_channel(parser: argparse.ArgumentParser, channel: str) -> str:
-    if "/" in channel or channel in {".", ".."}:
-        parser.error("--channel must be a single directory name under ./channels")
-    return channel
-
-
-def build_paths(channel: str) -> ClipyPaths:
-    return ClipyPaths(
-        project_root=PROJECT_ROOT, work_root=data_root() / "channels" / channel
-    )
-
-
-def load_app_config(paths: ClipyPaths, channel: str) -> AppConfig:
-    config_path = Path(
-        os.environ.get("CLIPY_CONFIG") or paths.project_root / "config.toml"
-    )
-    return load_config(config_path, channel, paths.prompt_overrides_file)
-
-
-def _require_env(parser: argparse.ArgumentParser, key: str) -> str:
-    value = os.environ.get(key, "")
-    if not value:
-        parser.error(f"{key} environment variable not set")
-    return value
-
-
-def make_run(
-    url: str, paths: ClipyPaths, config: AppConfig, force_step: int | None = None
-) -> PipelineRun:
-    """Build a pipeline run; raises KeyError/FileNotFoundError on missing inputs."""
-    return PipelineRun(
-        url=url,
-        work_dir=paths.work_dir_for_url(url),
-        thumbnail_template=paths.thumbnail_template(config.channel.thumbnail_template),
-        config=config,
-        assemblyai_key=os.environ["ASSEMBLYAI_API_KEY"],
-        openrouter_key=os.environ["OPENROUTER_API_KEY"],
-        force_step=force_step,
-    )
-
-
-def _build_pipeline_run(
-    args: argparse.Namespace,
-    parser: argparse.ArgumentParser,
-    paths: ClipyPaths,
-    config: AppConfig,
-) -> PipelineRun:
-    if args.url is None:
-        parser.error("URL is required")
-    _require_env(parser, "ASSEMBLYAI_API_KEY")
-    _require_env(parser, "OPENROUTER_API_KEY")
-    try:
-        return make_run(args.url, paths, config, args.step)
-    except FileNotFoundError as exc:
-        parser.error(str(exc))
-
-
-def _force_rerun_from_step(run: PipelineRun, paths: ClipyPaths) -> None:
-    """Delete outputs from a step onward so downstream steps are recomputed."""
-    for step in range(run.force_step or 0, 7):
-        for pattern in STEP_OUTPUTS.get(step, []):
-            for output_path in run.work_dir.glob(pattern):
-                output_path.unlink()
-
-        clips_dir = run.work_dir / "clips"
-        if step == 4 and clips_dir.exists():
-            shutil.rmtree(clips_dir)
-        elif step == 5 and clips_dir.exists():
-            for folder in clips_dir.iterdir():
-                if folder.is_dir():
-                    for thumbnail in folder.glob("thumbnail.*"):
-                        thumbnail.unlink()
-                    for generated_thumbnail in folder.glob("generated_thumbnail.*"):
-                        generated_thumbnail.unlink()
-
-        if step == 6 and paths.queue_file.exists():
-            remove_work_dir_entries(paths.queue_file, run.work_dir)
-
-    logger.info("Forcing re-run from step %s.", run.force_step)
-
-
-def annotate_clips(clips: list[dict], sentences: list[dict], run: PipelineRun):
-    """Give each clip a real summary (its description) and YouTube chapters,
-    cached in clips.json. A failure leaves that clip's short description."""
-    todo = [clip for clip in clips if "chapters" not in clip]
-    if not todo:
-        return clips
-    logger.info("[3/6] Writing summaries and chapters for %s clips...", len(todo))
-
-    def annotate(clip: dict) -> None:
-        try:
-            notes = annotate_clip(
-                sentences,
-                clip["start_ms"],
-                clip["end_ms"],
-                run.openrouter_key,
-                run.config.models.clip,
-            )
-        except Exception as exc:  # noqa: BLE001 - chapters are optional
-            logger.warning("Could not annotate %r: %s", clip["title"], exc)
-            return
-        clip["description"] = notes["summary"]
-        clip["chapters"] = notes["chapters"]
-
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        list(pool.map(annotate, todo))
-    write_json_file(run.work_dir / "clips.json", clips)
-    return clips
-
-
-def run_pipeline(run: PipelineRun, paths: ClipyPaths) -> None:
-    logger.info("URL: %s", run.url)
-    logger.info("Work dir: %s", run.work_dir)
-
-    if run.force_step and run.work_dir.exists():
-        _force_rerun_from_step(run, paths)
-
-    run.work_dir.mkdir(parents=True, exist_ok=True)
-
-    audio = download_audio(run.url, run.work_dir)
-    # The video downloads alongside transcription and clip picking, and only
-    # if some clip still needs cutting.
-    clips_file = run.work_dir / "clips.json"
-    needs_video = not clips_file.exists() or clips_to_cut(
-        run.work_dir, read_json_file(clips_file)
-    )
-    pool = ThreadPoolExecutor(max_workers=1)
-    video = pool.submit(download_video, run.url, run.work_dir) if needs_video else None
-    try:
-        clips = _clips(run, audio, video)
-    finally:
-        pool.shutdown(cancel_futures=True)
-    clips = generate_thumbnails(
-        clips,
-        run.work_dir,
-        run.openrouter_key,
-        run.thumbnail_template,
-        run.config.channel,
-        run.config.models.image,
-        run.config.thumbnails,
-    )
-    save_queue(clips, paths.queue_file)
-
-    logger.info("Done: %s clips in %s", len(clips), run.work_dir / "clips")
-
-
-def _clips(run: PipelineRun, audio: Path, video: Future | None) -> list[dict]:
-    """Transcribe, pick and annotate clips, then cut them."""
-
-    transcript = load_or_compute(
-        run.work_dir / "transcript.json",
-        transcribe_audio,
-        audio,
-        run.assemblyai_key,
-        run.config.models.speech,
-        skip_message="[2/6] Transcribing audio with AssemblyAI... skipped: transcript already exists",
-    )
-    sentences = load_or_compute(
-        run.work_dir / "sentences.json",
-        build_sentence_transcript,
-        transcript,
-    )
-    clips = load_or_compute(
-        run.work_dir / "clips.json",
-        extract_clips,
-        sentences,
-        run.openrouter_key,
-        run.config.channel.clip_extraction_prompt_template,
-        run.config.models.clip,
-        skip_message="[3/6] Extracting clip segments with LLM... skipped: clips already extracted",
-    )
-    clips = annotate_clips(clips, sentences, run)
-    return cut_clips(
-        video.result if video else None,
-        audio,
-        clips,
-        run.work_dir,
-        run.config.runtime.ffmpeg_path,
-    )
-
 
 def main() -> None:
-    parser = _build_parser()
+    parser = argparse.ArgumentParser(prog="clipy", description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    auth = commands.add_parser("auth", help="sign a channel in to YouTube")
+    auth.add_argument("channel")
+    process = commands.add_parser("process", help="clip one source video")
+    process.add_argument("channel")
+    process.add_argument("url")
+    process.add_argument("--speaker", help="the source's main speaker")
     args = parser.parse_args()
-    channel = _validate_channel(parser, args.channel)
-    paths = build_paths(channel)
-    load_dotenv(paths.project_root / ".env")
-    try:
-        config = load_app_config(paths, channel)
-    except ValueError as exc:
-        parser.error(str(exc))
+
+    load_dotenv(PROJECT_ROOT / ".env")
     setup_logging()
+    if args.channel not in {c.name for c in all_channels()}:
+        parser.error(f"config.toml has no [channels.{args.channel}]")
+    channel = Channel(args.channel)
+    config = channel.config()
 
-    if args.url == "auth":
-        authorize(paths.token_file, paths.project_root)
+    if args.command == "auth":
+        authorize(channel.token_file, config.channel.handle)
         return
-
-    run = _build_pipeline_run(args, parser, paths, config)
+    speaker = args.speaker or config.channel.speaker
+    if not speaker:
+        parser.error("this channel has no fixed speaker; pass --speaker")
     try:
-        run_pipeline(run, paths)
+        process_source(channel, args.url, speaker)
     except Exception:
-        logger.exception("Pipeline failed")
-        logger.info("Re-run with the same URL to resume from the last successful step.")
+        logger.exception("Processing failed; run it again to resume.")
         sys.exit(1)

@@ -1,16 +1,13 @@
+# Copy to config.toml. Each channel's settings are [defaults] with
+# [channels.<name>] on top; the agent's prompt overrides win over both.
+
 [runtime]
-ffmpeg_path = "/opt/homebrew/bin/ffmpeg"
+ffmpeg_path = "ffmpeg"
 
 [models]
 clip = "z-ai/glm-5.3-flash"
 image = "bytedance-seed/seedream-5-0-lite"
 speech = "universal-3-5-pro"
-
-[thumbnails]
-illustration_size = [700, 700]
-
-[youtube]
-category_id = "22"
 
 [defaults]
 description_template = """
@@ -19,17 +16,19 @@ description_template = """
 Original: {original_url}
 """
 
+# {speaker} is the source's main speaker.
 clip_extraction_prompt_template = """
-Extract good standalone clips from this transcript.
+Extract good standalone clips of {speaker} from this transcript.
 
 Return JSON in this exact format:
 {
   "clips": [
     {
-      "title": "Short descriptive title for the clip",
+      "title": "{speaker} on [subject]",
       "description": "Brief description for YouTube",
       "start_ms": 12345,
       "end_ms": 67890,
+      "score": 7,
       "thumbnail_prompt": "Detailed prompt for generating a thumbnail image."
     }
   ]
@@ -40,17 +39,17 @@ illustration_prompt_template = """
 Create a simple illustration for a YouTube thumbnail about: {prompt}.
 Use a pure WHITE background (#FFFFFF).
 """
-illustration_center_x = 850
-illustration_center_y = 350
 
+# A channel about one person: a fixed speaker and thumbnail template (in
+# ./thumbnails, a photo on the left and white on the right).
 [channels.example]
-# Thumbnail template in ./thumbnails that clip illustrations are drawn onto.
+handle = "@ExampleClips"
+speaker = "Example Person"
 thumbnail_template = "example.jpg"
-description_template = """
-{clip_description}
+category_id = "28"
 
-Clip from Example Channel
-Original: {original_url}
-"""
-illustration_center_x = 1275
-illustration_center_y = 525
+# A channel of many speakers: thumbnails put each clip speaker's headshot
+# (<data dir>/headshots/<name>.jpg, which the agent makes) on the left.
+[channels.ideas]
+handle = "@IdeasClips"
+category_id = "27"

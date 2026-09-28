@@ -1,204 +1,121 @@
+"""Thumbnails: a picture on the left, and on the white right side an
+illustration of the clip's idea drawn by the image model.
+
+The left is the channel's fixed template (thumbnails/<file>) when it has one,
+otherwise the clip speaker's headshot (see headshots.py) with a soft shadow.
+"""
+
 import base64
-import binascii
 import io
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
-import requests
-from PIL import Image
+from PIL import Image, ImageFilter
 
-from .common import openrouter_message_images, openrouter_request
-from .config import ChannelConfig, ThumbnailConfig
+from . import headshots
+from .channel import PROJECT_ROOT
+from .common import openrouter_message, openrouter_request
+from .config import Config
 from .cutting import clip_folder_name
 
 logger = logging.getLogger(__name__)
+
+SIZE = (1920, 1080)
+ILLUSTRATION_SIZE = (700, 700)
+SHADOW = 80
+WHITE = 240  # every channel at least this bright counts as white
 IMAGE_TIMEOUT_SECONDS = 120
 MAX_WORKERS = 10
 
 
-def thumbnail_prompt_text(clip: dict) -> str:
-    """Normalize the prompt used both for generation and cache invalidation."""
-    return clip.get("thumbnail_prompt", clip["title"]).strip()
+def _left(config: Config, speaker: str | None) -> Image.Image:
+    """The thumbnail before its illustration."""
+    if config.channel.thumbnail_template:
+        path = PROJECT_ROOT / "thumbnails" / config.channel.thumbnail_template
+        return Image.open(path).convert("RGB").resize(SIZE)
+    if not speaker:
+        raise ValueError("This channel's thumbnails need the clip's speaker.")
+    panel = headshots.panel(speaker)
+    canvas = Image.new("RGB", SIZE, "white")
+    shade = Image.new("L", SIZE, 0)
+    shade.paste(255, (0, 0, panel.width + SHADOW // 3, SIZE[1]))
+    shade = shade.filter(ImageFilter.GaussianBlur(SHADOW / 3))
+    canvas.paste((150, 150, 150), (0, 0), shade)
+    canvas.paste(panel, (0, 0))
+    return canvas
 
 
-def generate_illustration(
-    prompt: str,
-    output_path: Path,
-    api_key: str,
-    prompt_template: str,
-    model: str,
-) -> bool:
-    """Generate an illustration to be composited onto thumbnail template."""
-    logger.info("Generating illustration: %s...", output_path.name)
-
-    try:
-        illustration_prompt = prompt_template.format(prompt=prompt)
-        data = openrouter_request(
-            api_key,
-            {
-                "model": model,
-                "messages": [{"role": "user", "content": illustration_prompt}],
-                "modalities": ["image"],
-                "provider": {"sort": "price"},
-            },
-            IMAGE_TIMEOUT_SECONDS,
-        )
-
-        images = openrouter_message_images(data)
-        if images:
-            img_data_url = images[0].get("image_url", {}).get("url", "")
-            if img_data_url.startswith("data:image"):
-                # Extract base64 data after the comma
-                b64_data = img_data_url.split(",", 1)[1]
-                img_bytes = base64.b64decode(b64_data)
-                image = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
-                image.save(output_path, "PNG")
-                return True
-
-        logger.error("No image in OpenRouter response")
-        return False
-
-    except (
-        binascii.Error,
-        KeyError,
-        OSError,
-        RuntimeError,
-        ValueError,
-        requests.RequestException,
-    ) as exc:
-        logger.error("Illustration generation failed: %s", exc)
-        return False
+def _illustration(prompt: str, config: Config) -> Image.Image:
+    template = config.channel.illustration_prompt_template
+    data = openrouter_request(
+        {
+            "model": config.models.image,
+            "messages": [{"role": "user", "content": template.format(prompt=prompt)}],
+            "modalities": ["image"],
+            "provider": {"sort": "price"},
+        },
+        IMAGE_TIMEOUT_SECONDS,
+    )
+    for image in openrouter_message(data).get("images") or []:
+        url = image.get("image_url", {}).get("url", "")
+        if url.startswith("data:image"):
+            png = base64.b64decode(url.split(",", 1)[1])
+            return Image.open(io.BytesIO(png)).convert("RGBA")
+    raise RuntimeError("The image model returned no image.")
 
 
-def composite_thumbnail(
-    illustration_path: Path,
-    output_path: Path,
-    template_path: Path,
-    center_x: int,
-    center_y: int,
-    illustration_size: tuple[int, int],
-) -> bool:
-    """Crop illustration to non-white content, scale, and center on template."""
-    logger.info("Compositing thumbnail: %s...", output_path.name)
+def compose(left: Image.Image, illustration: Image.Image) -> Image.Image:
+    """Crop the illustration to its non-white content, scale it, and centre it
+    in the white area right of the picture."""
+    pixels = np.array(illustration)
+    ink = (pixels[:, :, 3] > 10) & (pixels[:, :, :3] < 220).any(axis=2)
+    rows, cols = np.nonzero(ink)
+    if not rows.size:
+        raise RuntimeError("The illustration is blank.")
+    drawn = illustration.crop((cols.min(), rows.min(), cols.max() + 1, rows.max() + 1))
+    drawn.thumbnail(ILLUSTRATION_SIZE, Image.Resampling.LANCZOS)
 
-    if not template_path.exists():
-        logger.error("Thumbnail template not found at %s", template_path)
-        return False
-
-    try:
-        template = Image.open(template_path).convert("RGBA")
-        illustration = Image.open(illustration_path).convert("RGBA")
-
-        # Find bounding box of non-white pixels using numpy
-        arr = np.array(illustration)
-        threshold = 220
-        # Mask: alpha > 10 and any RGB channel below threshold
-        mask = (arr[:, :, 3] > 10) & (
-            (arr[:, :, 0] < threshold)
-            | (arr[:, :, 1] < threshold)
-            | (arr[:, :, 2] < threshold)
-        )
-        coords = np.argwhere(mask)
-
-        if coords.size == 0:
-            logger.error("No non-white content found in illustration")
-            return False
-
-        # Crop to content (argwhere returns [row, col] = [y, x])
-        min_y, min_x = coords.min(axis=0)
-        max_y, max_x = coords.max(axis=0)
-        cropped = illustration.crop((min_x, min_y, max_x + 1, max_y + 1))
-
-        # Scale to fixed size, preserving aspect ratio
-        cropped.thumbnail(illustration_size, Image.Resampling.LANCZOS)
-
-        # Center on the template at the configured coordinates
-        paste_x = center_x - cropped.width // 2
-        paste_y = center_y - cropped.height // 2
-        template.paste(cropped, (paste_x, paste_y), cropped)
-
-        # Save as JPEG
-        template.convert("RGB").save(output_path, "JPEG", quality=95)
-        return True
-
-    except (OSError, ValueError) as exc:
-        logger.error("Thumbnail compositing failed: %s", exc)
-        return False
-
-
-def render_thumbnail(
-    prompt: str,
-    folder: Path,
-    api_key: str,
-    template_path: Path,
-    channel_config: ChannelConfig,
-    image_model: str,
-    thumbnail_settings: ThumbnailConfig,
-) -> Path | None:
-    """Generate a fresh illustration for prompt and composite it in folder."""
-    folder.mkdir(parents=True, exist_ok=True)
-    illustration = folder / "generated_thumbnail.png"
-    thumbnail = folder / "thumbnail.jpg"
-    if not generate_illustration(
-        prompt,
-        illustration,
-        api_key,
-        channel_config.illustration_prompt_template,
-        image_model,
-    ):
-        return None
-    if not composite_thumbnail(
-        illustration,
-        thumbnail,
-        template_path,
-        channel_config.illustration_center_x,
-        channel_config.illustration_center_y,
-        thumbnail_settings.illustration_size,
-    ):
-        return None
-    (folder / ".thumbnail_prompt").write_text(prompt, encoding="utf-8")
+    white = (np.array(left) >= WHITE).all(axis=(0, 2))
+    start = len(white) - int(np.argmin(white[::-1])) if not white.all() else 0
+    x = (start + SIZE[0]) // 2 - drawn.width // 2
+    y = SIZE[1] // 2 - drawn.height // 2
+    thumbnail = left.copy()
+    thumbnail.paste(drawn, (x, y), drawn)
     return thumbnail
 
 
-def generate_thumbnails(
-    clips: list[dict],
-    work_dir: Path,
-    api_key: str,
-    template_path: Path,
-    channel_config: ChannelConfig,
-    image_model: str,
-    thumbnail_settings: ThumbnailConfig,
-) -> list[dict]:
-    """Draw each clip's thumbnail in parallel, reusing any drawn from the same
-    prompt before."""
-    logger.info("[5/6] Generating thumbnails...")
+def draw(prompt: str, speaker: str | None, folder: Path, config: Config) -> Path:
+    """Draw a thumbnail for `prompt` into folder/thumbnail.jpg."""
+    left = _left(config, speaker)  # fails fast, before paying for an image
+    thumbnail = compose(left, _illustration(prompt, config))
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "thumbnail.jpg"
+    thumbnail.save(path, "JPEG", quality=95)
+    (folder / ".thumbnail_prompt").write_text(prompt, encoding="utf-8")
+    return path
 
-    def draw(i: int) -> str | None:
+
+def draw_all(clips: list[dict], source_dir: Path, config: Config) -> list[dict]:
+    """Each clip's thumbnail, drawn in parallel; one already drawn from the same
+    prompt is kept. A clip whose thumbnail fails gets thumbnail_path None."""
+    logger.info("[5/6] Drawing thumbnails...")
+
+    def one(i: int) -> str | None:
         clip = clips[i]
-        folder = work_dir / "clips" / clip_folder_name(i, clip["title"])
-        prompt = thumbnail_prompt_text(clip)
-        thumbnail = folder / "thumbnail.jpg"
-        prompt_file = folder / ".thumbnail_prompt"
-        if (
-            thumbnail.exists()
-            and prompt_file.exists()
-            and prompt_file.read_text(encoding="utf-8").strip() == prompt
-        ):
-            return str(thumbnail)
-        drawn = render_thumbnail(
-            prompt,
-            folder,
-            api_key,
-            template_path,
-            channel_config,
-            image_model,
-            thumbnail_settings,
-        )
-        return str(drawn) if drawn else None
+        folder = source_dir / "clips" / clip_folder_name(i, clip["title"])
+        prompt = clip.get("thumbnail_prompt", clip["title"]).strip()
+        done = folder / ".thumbnail_prompt"
+        if done.exists() and done.read_text(encoding="utf-8").strip() == prompt:
+            return str(folder / "thumbnail.jpg")
+        try:
+            return str(draw(prompt, clip.get("speaker"), folder, config))
+        except Exception as exc:  # noqa: BLE001 - the agent can redraw it
+            logger.error("Thumbnail for %r failed: %s", clip["title"], exc)
+            return None
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-        for i, path in enumerate(pool.map(draw, range(len(clips)))):
-            clips[i]["thumbnail_path"] = path
+        for clip, path in zip(clips, pool.map(one, range(len(clips))), strict=True):
+            clip["thumbnail_path"] = path
     return clips

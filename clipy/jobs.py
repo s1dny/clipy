@@ -35,9 +35,10 @@ class _JobLog(logging.Handler):
 
 
 class JobRunner:
-    """Runs long work one job at a time on a background thread, persisted to disk."""
+    """Runs every channel's long work one job at a time on a background thread,
+    persisted to disk. Each job belongs to a channel."""
 
-    def __init__(self, path: Path, handlers: dict[str, Callable[[dict], str]]):
+    def __init__(self, path: Path, handlers: dict[str, Callable[[str, dict], str]]):
         self.path = path
         self.handlers = handlers
         self._lock = threading.RLock()
@@ -61,9 +62,10 @@ class JobRunner:
         with self._lock:
             write_json_file(self.path, self._jobs)
 
-    def submit(self, kind: str, args: dict) -> dict:
+    def submit(self, channel: str, kind: str, args: dict) -> dict:
         job = {
             "id": uuid.uuid4().hex[:8],
+            "channel": channel,
             "kind": kind,
             "args": args,
             "status": "queued",
@@ -75,17 +77,18 @@ class JobRunner:
         self._wake.set()
         return job
 
-    def list(self, limit: int = 10) -> list[dict]:
+    def list(self, channel: str, limit: int = 10) -> list[dict]:
+        """The channel's newest jobs first."""
         with self._lock:
-            return json.loads(json.dumps(self._jobs[-limit:][::-1]))
+            mine = [job for job in self._jobs if job["channel"] == channel]
+            return json.loads(json.dumps(mine[::-1][:limit]))
 
-    def active(self, kind: str) -> list[dict]:
-        with self._lock:
-            return [
-                job
-                for job in self._jobs
-                if job["kind"] == kind and job["status"] in {"queued", "running"}
-            ]
+    def active(self, channel: str, kind: str) -> list[dict]:
+        return [
+            job
+            for job in self.list(channel, len(self._jobs))
+            if job["kind"] == kind and job["status"] in {"queued", "running"}
+        ]
 
     def _next(self) -> dict | None:
         with self._lock:
@@ -109,7 +112,7 @@ class JobRunner:
         package_logger = logging.getLogger("clipy")
         package_logger.addHandler(handler)
         try:
-            result = self.handlers[job["kind"]](job["args"])
+            result = self.handlers[job["kind"]](job["channel"], job["args"])
             status, error = "succeeded", None
         except Exception as exc:  # noqa: BLE001 - a job failure must not kill the worker
             logger.error("Job %s failed: %s", job["id"], exc)

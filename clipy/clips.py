@@ -1,32 +1,24 @@
+"""Picking clips from a transcript and writing each one's summary and
+chapters, with the clip model on OpenRouter."""
+
 import json
 import logging
 
-from .common import openrouter_message_text, openrouter_request
+from .common import openrouter_json
 
 logger = logging.getLogger(__name__)
 CLIP_TIMEOUT_SECONDS = 3600
-
-
-def json_object(text: str) -> dict:
-    """The JSON object in a model reply, ignoring any text around it."""
-    return json.loads(text[text.index("{") : text.rindex("}") + 1])
+ANNOTATE_TIMEOUT_SECONDS = 600
 
 
 def extract_clips(
-    sentences: list[dict],
-    api_key: str,
-    prompt_template: str,
-    model: str,
+    sentences: list[dict], prompt_template: str, speaker: str, model: str
 ) -> list[dict]:
-    """Use LLM to extract interesting clip segments from sentence transcript."""
-    logger.info("[3/6] Extracting clip segments with LLM...")
-
-    transcript_text = json.dumps(sentences)
-
-    prompt = f"{prompt_template}\n\nTranscript:\n{transcript_text}"
-
-    data = openrouter_request(
-        api_key,
+    """The clips the prompt picks from the transcript, each tagged with the
+    source's main speaker. {speaker} in the prompt is that speaker's name."""
+    logger.info("[3/6] Picking clips...")
+    prompt = prompt_template.replace("{speaker}", speaker)
+    clips = openrouter_json(
         {
             "model": model,
             "messages": [
@@ -34,42 +26,35 @@ def extract_clips(
                     "role": "system",
                     "content": "You are an expert video editor. Return only JSON.",
                 },
-                {"role": "user", "content": prompt},
+                {
+                    "role": "user",
+                    "content": f"{prompt}\n\nTranscript:\n{json.dumps(sentences)}",
+                },
             ],
             "response_format": {"type": "json_object"},
             "provider": {"sort": "price"},
         },
         CLIP_TIMEOUT_SECONDS,
-    )
-    clips = json_object(openrouter_message_text(data))["clips"]
-
-    logger.info("Found %s clips:", len(clips))
+    )["clips"]
     for i, clip in enumerate(clips):
-        duration_min = (clip["end_ms"] - clip["start_ms"]) / 60000
-        logger.info(
-            "%s. %s (%.1fm)",
-            i + 1,
-            clip["title"],
-            duration_min,
-            extra={"highlighter": None},
-        )
-
+        clip["speaker"] = speaker
+        minutes = (clip["end_ms"] - clip["start_ms"]) / 60000
+        logger.info("%s. %s (%.1fm)", i + 1, clip["title"], minutes)
     return clips
 
 
-ANNOTATE_TIMEOUT_SECONDS = 600
-ANNOTATE_PROMPT = """Below is the transcript of one YouTube clip of Jonathan Blow, with
+ANNOTATE_PROMPT = """Below is the transcript of one YouTube clip of {speaker}, with
 timestamps from the start of the clip. Write:
 
-1. "summary": 3-5 sentences in plain language saying what he argues or
-   explains, with the specific technologies, games, or people he names. It
-   goes at the top of the video description, so make it genuinely useful to
-   someone deciding whether to watch; no hype, no claims he doesn't make.
+1. "summary": 3-5 sentences in plain language saying what {speaker} argues or
+   explains, with the specific ideas, works, or people named. It goes at the
+   top of the video description, so make it genuinely useful to someone
+   deciding whether to watch; no hype, no claims that aren't made.
 2. "chapters": 3-8 chapters marking where the discussion moves to a new point,
-   each {"start_seconds": <int>, "title": "<2-6 words>"}. The first starts at
+   each {{"start_seconds": <int>, "title": "<2-6 words>"}}. The first starts at
    0; chapters are at least 30 seconds apart.
 
-Return only JSON: {"summary": "...", "chapters": [...]}"""
+Return only JSON: {{"summary": "...", "chapters": [...]}}"""
 
 
 def _clock(seconds: int) -> str:
@@ -78,28 +63,26 @@ def _clock(seconds: int) -> str:
     return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
 
 
-def annotate_clip(
-    sentences: list[dict], start_ms: int, end_ms: int, api_key: str, model: str
-) -> dict:
+def annotate_clip(sentences: list[dict], clip: dict, model: str) -> dict:
     """Summary and chapter list for one clip, from its slice of the transcript."""
+    start_ms, end_ms = clip["start_ms"], clip["end_ms"]
     lines = [
         f"[{_clock((s['start'] - start_ms) / 1000)}] {s['text']}"
         for s in sentences
         if start_ms <= s["start"] < end_ms
     ]
-    data = openrouter_request(
-        api_key,
+    prompt = ANNOTATE_PROMPT.format(speaker=clip["speaker"])
+    result = openrouter_json(
         {
             "model": model,
             "messages": [
-                {"role": "user", "content": ANNOTATE_PROMPT + "\n\n" + "\n".join(lines)}
+                {"role": "user", "content": prompt + "\n\n" + "\n".join(lines)}
             ],
             "response_format": {"type": "json_object"},
             "provider": {"sort": "price"},
         },
         ANNOTATE_TIMEOUT_SECONDS,
     )
-    result = json_object(openrouter_message_text(data))
     return {
         "summary": result["summary"].strip(),
         "chapters": valid_chapters(

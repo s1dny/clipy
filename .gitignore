@@ -1,6 +1,6 @@
 videos.md
 config.toml
-channels/
+/channels/
 *.json
 *.env
 .DS_Store

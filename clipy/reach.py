@@ -26,7 +26,7 @@ REPORT_TYPE = "channel_reach_basic_a1"
 SYNC_EVERY_SECONDS = 3 * 3600
 
 _lock = threading.Lock()
-_last_sync = 0.0
+_last_sync: dict[Path, float] = {}  # per channel's store
 
 
 def _load(store: Path) -> dict:
@@ -38,10 +38,12 @@ def _load(store: Path) -> dict:
 def sync(token: Path, store: Path, force: bool = False) -> dict:
     """Download reach reports not seen yet (at most every few hours) and
     return the stored rows."""
-    global _last_sync
     with _lock:
         data = _load(store)
-        if not force and time.monotonic() - _last_sync < SYNC_EVERY_SECONDS:
+        if (
+            not force
+            and time.monotonic() - _last_sync.get(store, 0) < SYNC_EVERY_SECONDS
+        ):
             return data
         credentials = get_credentials(token)
         api = build(
@@ -82,7 +84,7 @@ def sync(token: Path, store: Path, force: bool = False) -> dict:
                 ]
             data["reports"].append(report["id"])
         write_json_file(store, data)
-        _last_sync = time.monotonic()
+        _last_sync[store] = time.monotonic()
         return data
 
 

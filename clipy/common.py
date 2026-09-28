@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -8,19 +9,15 @@ from urllib.parse import parse_qs, urlparse
 
 import requests
 
-OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
-
 logger = logging.getLogger(__name__)
 
 
-def openrouter_request(api_key: str, body: dict, timeout: int) -> dict[str, Any]:
-    """Make a request to OpenRouter API and return the parsed response."""
+def openrouter_request(body: dict, timeout: int) -> dict[str, Any]:
+    """POST a chat completion to OpenRouter and return the parsed response."""
     resp = requests.post(
-        OPENROUTER_API_URL,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
+        os.environ.get("OPENROUTER_API_URL")
+        or "https://openrouter.ai/api/v1/chat/completions",
+        headers={"Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}"},
         json=body,
         timeout=timeout,
     )
@@ -28,13 +25,9 @@ def openrouter_request(api_key: str, body: dict, timeout: int) -> dict[str, Any]
         logger.error("API error %s: %s", resp.status_code, resp.text[:500])
         resp.raise_for_status()
     data = resp.json()
-    error = data.get("error")
-    if error:
-        if isinstance(error, dict):
-            message = error.get("message") or json.dumps(error)
-        else:
-            message = str(error)
-        raise RuntimeError(f"OpenRouter error: {message}")
+    if error := data.get("error"):
+        message = error.get("message") if isinstance(error, dict) else None
+        raise RuntimeError(f"OpenRouter error: {message or error}")
     return data
 
 
@@ -43,22 +36,12 @@ def openrouter_message(data: dict) -> dict[str, Any]:
     return data["choices"][0]["message"]
 
 
-def openrouter_message_text(data: dict) -> str:
-    """Extract plain text content from an OpenRouter response."""
-    message = openrouter_message(data)
-    content = message.get("content")
-    if isinstance(content, str):
-        return content
-    raise ValueError("OpenRouter response did not include text content")
-
-
-def openrouter_message_images(data: dict) -> list[dict[str, Any]]:
-    """Extract image items from an OpenRouter response."""
-    message = openrouter_message(data)
-    images = message.get("images")
-    if isinstance(images, list):
-        return [image for image in images if isinstance(image, dict)]
-    return []
+def openrouter_json(body: dict, timeout: int) -> dict:
+    """A JSON-mode completion's object, ignoring any text around it."""
+    text = openrouter_message(openrouter_request(body, timeout)).get("content")
+    if not isinstance(text, str):
+        raise TypeError("OpenRouter response did not include text content")
+    return json.loads(text[text.index("{") : text.rindex("}") + 1])
 
 
 def extract_video_id(url: str) -> str:
@@ -94,16 +77,9 @@ def write_json_file(path: Path, data: Any) -> None:
         json.dump(data, file, indent=2)
 
 
-def load_or_compute(
-    path: Path,
-    compute_fn: Callable[..., Any],
-    *args: Any,
-    skip_message: str | None = None,
-) -> Any:
+def load_or_compute(path: Path, compute_fn: Callable[..., Any], *args: Any) -> Any:
     """Load JSON from path if it exists, otherwise compute, save, and return."""
     if path.exists():
-        if skip_message:
-            logger.info(skip_message)
         return read_json_file(path)
     result = compute_fn(*args)
     write_json_file(path, result)

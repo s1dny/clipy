@@ -1,13 +1,14 @@
-"""The daily report to the channel owner over Matrix.
+"""Each channel's daily report to the owner over Matrix.
 
 The agent sends the report with the send_report tool; when the run ends,
-agent/run.sh edits that message to append the run's stats line, so each day
-is one message:
+agent/run.sh edits that message to append the run's stats line, so each
+channel's day is one message:
 
-    python -m clipy.matrix finish STARTED_EPOCH STATS [FAILURE_FILE]
+    python -m clipy.matrix finish CHANNEL STARTED_EPOCH STATS [FAILURE_FILE]
 
-The bot opens a direct room with MATRIX_NOTIFY_USER on first use and keeps
-its id, and the last report's, in the data directory.
+The bot opens a direct room with MATRIX_NOTIFY_USER on first use, shared by
+every channel, and keeps its id in the data directory; each channel keeps its
+last report's in its own directory.
 """
 
 import json
@@ -20,10 +21,9 @@ from pathlib import Path
 
 import markdown
 
-from .paths import data_root
+from .channel import Channel, data_root
 
 ROOM_FILE = data_root() / "matrix-room"
-LAST_REPORT_FILE = data_root() / "last-report.json"
 
 
 def configured() -> bool:
@@ -81,11 +81,13 @@ def _put(room: str, content: dict) -> str:
     return _call("PUT", path, content)["event_id"]
 
 
-def send(text: str) -> str:
-    """Post a Markdown message and remember it as the latest report."""
+def send(channel: Channel, text: str) -> str:
+    """Post a Markdown report headed with the channel's handle, and remember it
+    as the channel's latest."""
+    text = f"## {channel.config().channel.handle}\n\n{text}"
     room = _room()
     event_id = _put(room, _content(text))
-    LAST_REPORT_FILE.write_text(
+    channel.last_report_file.write_text(
         json.dumps(
             {"room": room, "event_id": event_id, "text": text, "at": time.time()}
         )
@@ -93,9 +95,12 @@ def send(text: str) -> str:
     return event_id
 
 
-def finish(started: float, stats: str, failure: str | None = None) -> None:
+def finish(
+    channel: Channel, started: float, stats: str, failure: str | None = None
+) -> None:
     """Append the stats line to this run's report, or report the failure."""
-    last = json.loads(LAST_REPORT_FILE.read_text()) if LAST_REPORT_FILE.exists() else {}
+    path = channel.last_report_file
+    last = json.loads(path.read_text()) if path.exists() else {}
     if failure is None and last.get("at", 0) >= started:
         text = f"{last['text']}\n\n{stats}"
         content = _content(text)
@@ -109,11 +114,11 @@ def finish(started: float, stats: str, failure: str | None = None) -> None:
         )
         return
     reason = failure or "clipy finished without sending a report."
-    _put(_room(), _content(f"{reason}\n\n{stats}"))
+    _put(_room(), _content(f"## {channel.name}\n\n{reason}\n\n{stats}"))
 
 
 if __name__ == "__main__":
-    command, started, stats, *rest = sys.argv[1:]
+    command, name, started, stats, *rest = sys.argv[1:]
     assert command == "finish"
     failure = Path(rest[0]).read_text() if rest else None
-    finish(float(started), stats, failure)
+    finish(Channel(name), float(started), stats, failure)
