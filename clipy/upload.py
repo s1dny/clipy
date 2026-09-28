@@ -155,8 +155,8 @@ def upload_video(youtube, item: dict, description_template: str, category_id: st
 
 def set_thumbnail(youtube, item: dict) -> bool:
     """Set an uploaded clip's thumbnail. On failure (YouTube rate-limits
-    thumbnails per account) the item is marked thumbnail_pending, which the
-    server retries every hour."""
+    thumbnails per account) the item is marked thumbnail_pending, for the
+    agent to retry on a later run (retry_thumbnails)."""
     from googleapiclient.errors import HttpError
     from googleapiclient.http import MediaFileUpload
 

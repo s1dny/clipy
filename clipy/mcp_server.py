@@ -13,7 +13,6 @@ import hmac
 import logging
 import os
 import re
-import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -44,7 +43,6 @@ from .upload import set_thumbnail, upload_video
 
 logger = logging.getLogger(__name__)
 
-THUMBNAIL_RETRY_SECONDS = 3600
 LOCAL_TZ = ZoneInfo(os.environ.get("CLIPY_TIMEZONE", "Australia/Sydney"))
 
 READ = ToolAnnotations(readOnlyHint=True, openWorldHint=True)
@@ -142,20 +140,6 @@ def _thumbnails_job(name: str, _args: dict) -> str:
         done += 1
     write_json_file(channel.queue_file, queue)
     return f"Set {done} of {len(pending)} pending thumbnails."
-
-
-def _retry_thumbnails_forever() -> None:
-    while True:
-        time.sleep(THUMBNAIL_RETRY_SECONDS)
-        for channel in all_channels():
-            try:
-                queue = load_queue(channel.queue_file)
-                if any(i.get("thumbnail_pending") for i in queue) and not jobs.active(
-                    channel.name, "thumbnails"
-                ):
-                    jobs.submit(channel.name, "thumbnails", {})
-            except Exception as exc:  # noqa: BLE001 - try again next hour
-                logger.warning("Thumbnail retry for %s: %s", channel.name, exc)
 
 
 def _process_job(name: str, args: dict) -> str:
@@ -281,6 +265,19 @@ async def process_source(url: str, speaker: str | None = None) -> dict:
     if not config.thumbnail_template:
         headshots.panel(speaker)  # says where to save it if it is missing
     return jobs.submit(ch().name, "process_source", {"url": url, "speaker": speaker})
+
+
+@tool(WRITE)
+async def retry_thumbnails() -> dict:
+    """Set the thumbnails YouTube refused when their clips were uploaded
+    (list_queue shows them as thumbnail_pending; YouTube rate-limits
+    thumbnail uploads per account). Runs as a background job; there is no
+    need to wait for it."""
+    if not any(i.get("thumbnail_pending") for i in _queue()):
+        raise ValueError("No uploaded clip is waiting for its thumbnail.")
+    if active := jobs.active(ch().name, "thumbnails"):
+        return active[0]
+    return jobs.submit(ch().name, "thumbnails", {})
 
 
 @tool(READ)
@@ -622,7 +619,6 @@ def main() -> None:
             "thumbnails": _thumbnails_job,
         },
     )
-    threading.Thread(target=_retry_thumbnails_forever, daemon=True).start()
 
     app = mcp.streamable_http_app(
         streamable_http_path="/mcp",

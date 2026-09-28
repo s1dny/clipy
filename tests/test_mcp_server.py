@@ -332,3 +332,9 @@ def test_waiting_on_an_unknown_job_says_so(server):
     result = call(server, "wait_for_job", {"job_id": "nope", "max_minutes": 1})
     assert result.is_error
     assert "No job 'nope'" in text(result)
+
+
+def test_thumbnail_retries_need_a_refused_thumbnail(server):
+    result = call(server, "retry_thumbnails")
+    assert result.is_error
+    assert "No uploaded clip is waiting for its thumbnail" in text(result)
