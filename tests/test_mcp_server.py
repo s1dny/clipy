@@ -203,6 +203,7 @@ def test_endpoints_need_the_token_and_a_channel(server):
     assert (
         requests.post(f"{base}/mcp/blow", headers=wrong, timeout=5).status_code == 401
     )
+    assert requests.get(f"{base}/stats", timeout=5).status_code == 401
     right = {"Authorization": f"Bearer {TOKEN}"}
     for path in ("/mcp", "/mcp/nope"):
         assert requests.post(base + path, headers=right, timeout=5).status_code == 404
@@ -219,6 +220,7 @@ def test_endpoints_need_the_token_and_a_channel(server):
         "sample_source",
         "wait_for_job",
     } <= asyncio.run(names())
+    assert "send_report" not in asyncio.run(names())
 
 
 def test_each_channel_keeps_its_own_notes_and_queue(server):
@@ -330,9 +332,3 @@ def test_waiting_on_an_unknown_job_says_so(server):
     result = call(server, "wait_for_job", {"job_id": "nope", "max_minutes": 1})
     assert result.is_error
     assert "No job 'nope'" in text(result)
-
-
-def test_report_needs_matrix(server):
-    result = call(server, "send_report", {"message": "## Today\n\n- nothing"})
-    assert result.is_error
-    assert "Matrix is not configured" in text(result)

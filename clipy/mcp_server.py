@@ -31,7 +31,7 @@ from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 from starlette.routing import Route
 
-from . import analytics, headshots, matrix, sources, thumbnails
+from . import analytics, headshots, sources, stats, thumbnails
 from .channel import PROJECT_ROOT, Channel, all_channels, data_root
 from .common import extract_video_id, read_json_file, write_json_file
 from .config import PROMPT_KEYS
@@ -499,16 +499,6 @@ async def update_prompts(
     return await get_prompts()
 
 
-@tool(WRITE)
-async def send_report(message: str) -> dict:
-    """Send today's report to the channel owner over Matrix, headed with the
-    channel's name. Markdown renders (headings, bold, lists, links). The run's
-    duration and token stats are appended automatically when the run ends."""
-    if not matrix.configured():
-        raise ValueError("Matrix is not configured (MATRIX_ACCESS_TOKEN is unset).")
-    return {"event_id": await _sync(matrix.send, ch(), message)}
-
-
 @tool(READ)
 async def read_notes() -> str:
     """Your strategy notebook from earlier runs: what was tried, what worked,
@@ -540,21 +530,32 @@ async def _healthz(_: Request) -> PlainTextResponse:
     return PlainTextResponse("ok")
 
 
+async def _stats(_: Request) -> PlainTextResponse:
+    """The stats header of the daily report, for agent/run.sh."""
+    return PlainTextResponse(await _sync(stats.report))
+
+
 class _Gate:
     """Every request except /healthz needs `Authorization: Bearer <token>`,
     and /mcp/<channel> serves the MCP endpoint for that channel."""
+
+    OPEN = frozenset({"/healthz"})
+    GLOBAL = frozenset({"/stats"})
 
     def __init__(self, app, token: str):
         self.app = app
         self.expected = f"Bearer {token}".encode()
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or scope["path"] == "/healthz":
+        if scope["type"] != "http" or scope["path"] in self.OPEN:
             await self.app(scope, receive, send)
             return
         supplied = dict(scope["headers"]).get(b"authorization", b"")
         if not hmac.compare_digest(supplied, self.expected):
             await PlainTextResponse("unauthorized", 401)(scope, receive, send)
+            return
+        if scope["path"] in self.GLOBAL:
+            await self.app(scope, receive, send)
             return
         name = scope["path"].removeprefix("/mcp/").strip("/")
         if name not in {c.name for c in all_channels()}:
@@ -593,7 +594,7 @@ def main() -> None:
             enable_dns_rebinding_protection=False
         ),
     )
-    app.router.routes.append(Route("/healthz", _healthz))
+    app.router.routes += [Route("/healthz", _healthz), Route("/stats", _stats)]
     uvicorn.run(
         _Gate(app, token),
         host=os.environ.get("HOST", "0.0.0.0"),

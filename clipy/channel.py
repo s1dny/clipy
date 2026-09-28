@@ -54,10 +54,6 @@ class Channel:
     def reach_file(self) -> Path:
         return self.dir / "reach.json"
 
-    @property
-    def last_report_file(self) -> Path:
-        return self.dir / "last-report.json"
-
     def config(self) -> Config:
         """Read fresh each time, so prompt overrides apply at once."""
         return load_config(config_path(), self.name, self.prompt_overrides_file)

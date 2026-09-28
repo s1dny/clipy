@@ -1,6 +1,7 @@
 """Read `codex exec --json` events.
 
 events.py stream              stdin JSONL -> readable log lines on stdout
+events.py final LOG           the run's last agent message
 events.py footer LOG SECONDS  the run's stats line; exits 1 if no clipy
                               tool call completed (Codex itself exits 0)
 """
@@ -37,6 +38,17 @@ def stream() -> None:
             print(f"{event['type']}: {json.dumps(event)}", flush=True)
 
 
+def final(log: str) -> None:
+    with open(log, encoding="utf-8") as file:
+        messages = [
+            e["item"]["text"]
+            for e in events(file)
+            if e["type"] == "item.completed"
+            and e.get("item", {}).get("type") == "agent_message"
+        ]
+    print(messages[-1] if messages else "")
+
+
 def duration(seconds: int) -> str:
     minutes, secs = divmod(seconds, 60)
     return f"{minutes}m {secs:02d}s" if minutes else f"{secs}s"
@@ -70,5 +82,7 @@ def footer(log: str, seconds: int) -> int:
 if __name__ == "__main__":
     if sys.argv[1] == "stream":
         stream()
+    elif sys.argv[1] == "final":
+        final(sys.argv[2])
     else:
         sys.exit(footer(sys.argv[2], int(sys.argv[3])))

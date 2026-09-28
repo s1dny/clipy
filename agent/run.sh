@@ -1,9 +1,11 @@
 #!/bin/sh
 # The daily unattended runs of clipy: for each channel named on the command
 # line, one Codex run (signed in with a ChatGPT subscription) driving that
-# channel's clipy MCP endpoint. Channels run one after another, so they never
-# share the ChatGPT login at once; one failing does not stop the rest.
-# CODEX_HOME must be persistent so the refreshed tokens in auth.json survive.
+# channel's clipy MCP endpoint; then an observer run that reads them all and
+# writes the owner's report, sent over Matrix as one message under a stats
+# header from the server. Runs go one after another, so they never share the
+# ChatGPT login at once; one failing does not stop the rest. CODEX_HOME must
+# be persistent so the refreshed tokens in auth.json survive.
 #
 #   run.sh blow science philosophy
 #
@@ -18,12 +20,26 @@ set -o pipefail 2>/dev/null || true
 : "${CLIPY_DATA_DIR:=/data}"
 : "${CLIPY_MCP_TOKEN:?}"
 : "${CLIPY_AGENT_DIR:=/app/agent}"
-export CLIPY_MCP_TOKEN CODEX_HOME
+export CLIPY_MCP_TOKEN CLIPY_MCP_URL CODEX_HOME
 
 if [ ! -s "$CODEX_HOME/auth.json" ]; then
   echo "No ChatGPT login in $CODEX_HOME; run: codex login --device-auth" >&2
   exit 1
 fi
+# codex exec with the settings every run shares; the prompt is stdin.
+codex_run() {
+  codex exec \
+    --json \
+    --skip-git-repo-check \
+    --ephemeral \
+    --dangerously-bypass-approvals-and-sandbox \
+    --model "${CODEX_MODEL:-gpt-6-sol}" \
+    -c "model_reasoning_effort=\"${CODEX_REASONING:-medium}\"" \
+    -c 'cli_auth_credentials_store="file"' \
+    -c 'web_search="live"' \
+    "$@" - 2>&1
+}
+
 run_channel() {
   channel=$1
   work=/tmp/agent/$channel
@@ -40,47 +56,92 @@ run_channel() {
     if [ -n "${CLIPY_AGENT_NOTE:-}" ]; then
       printf '\nOne-off instruction from the owner for this run (it overrides the rules above where they conflict):\n%s\n' "$CLIPY_AGENT_NOTE"
     fi; } \
-    | codex exec \
-      --json \
-      --skip-git-repo-check \
-      --ephemeral \
+    | codex_run \
       --cd "$work" \
-      --dangerously-bypass-approvals-and-sandbox \
-      --model "${CODEX_MODEL:-gpt-6-sol}" \
-      -c "model_reasoning_effort=\"${CODEX_REASONING:-medium}\"" \
-      -c 'cli_auth_credentials_store="file"' \
-      -c 'web_search="live"' \
       -c "mcp_servers.clipy.url=\"$CLIPY_MCP_URL/$channel\"" \
       -c 'mcp_servers.clipy.bearer_token_env_var="CLIPY_MCP_TOKEN"' \
       -c 'mcp_servers.clipy.required=true' \
       -c 'mcp_servers.clipy.default_tools_approval_mode="approve"' \
       -c 'mcp_servers.clipy.tool_timeout_sec=900' \
-      - 2>&1 \
     | tee "$log" | python "$CLIPY_AGENT_DIR/events.py" stream || status=$?
 
   # Codex exits 0 even when every tool call failed, so a run only counts if it
-  # reached the server; the same pass works out the stats line for the report.
-  stats=$(python "$CLIPY_AGENT_DIR/events.py" footer "$log" $(( $(date +%s) - started ))) \
-    || status=1
-  echo "$stats"
-
-  # Append the stats line to the report the agent sent with send_report, or
-  # report why the run failed. A Matrix outage never fails the run.
-  if [ -n "${MATRIX_ACCESS_TOKEN:-}" ]; then
-    failure=
-    if [ "$status" -ne 0 ]; then
-      failure=$work/failure.txt
-      { echo "The clipy run failed. Last events:"; echo
-        tail -n 15 "$log" | python "$CLIPY_AGENT_DIR/events.py" stream | sed 's/^/    /'; } > "$failure"
-    fi
-    python -m clipy.matrix finish "$channel" "$started" "$stats" $failure \
-      || echo "clipy: Matrix report failed" >&2
-  fi
+  # reached the server; the same pass works out the run's stats line.
+  python "$CLIPY_AGENT_DIR/events.py" footer "$log" $(( $(date +%s) - started )) \
+    > "$work/footer" || status=1
+  cat "$work/footer"
+  [ "$status" -eq 0 ] || echo "This run failed (exit $status)." >> "$work/footer"
   return "$status"
+}
+
+# What the observer and the fallback report see of a channel's run.
+run_summary() {
+  echo "### $1"
+  echo
+  echo "Log:"
+  python "$CLIPY_AGENT_DIR/events.py" stream < "/tmp/agent/$1/events.jsonl" | sed 's/^/    /'
+  echo
+  echo "Final message:"
+  python "$CLIPY_AGENT_DIR/events.py" final "/tmp/agent/$1/events.jsonl"
+  echo
+  cat "/tmp/agent/$1/footer"
+  echo
+}
+
+# The server builds the stats header, since only it can use the YouTube tokens.
+stats_header() {
+  python - <<'PY'
+import os, urllib.request
+request = urllib.request.Request(
+    os.environ["CLIPY_MCP_URL"].rsplit("/mcp", 1)[0] + "/stats",
+    headers={"Authorization": f"Bearer {os.environ['CLIPY_MCP_TOKEN']}"},
+)
+with urllib.request.urlopen(request, timeout=300) as response:
+    print(response.read().decode())
+PY
+}
+
+report() {
+  work=/tmp/agent/observer
+  mkdir -p "$work"
+  stats_header > "$work/stats.md" \
+    || echo "(The stats header is unavailable: the server did not answer.)" > "$work/stats.md"
+  { cat "$CLIPY_AGENT_DIR/observer.md" "$work/stats.md"
+    echo; echo "Runs:"; echo
+    for channel in "$@"; do run_summary "$channel"; done; } > "$work/prompt.md"
+
+  echo "=== observer"
+  started=$(date +%s)
+  codex_run --cd "$work" < "$work/prompt.md" > "$work/events.jsonl"
+  python "$CLIPY_AGENT_DIR/events.py" final "$work/events.jsonl" > "$work/observer.md"
+  observed=$(( $(date +%s) - started ))
+
+  { cat "$work/stats.md"; echo; echo "---"; echo
+    if [ -s "$work/observer.md" ]; then
+      cat "$work/observer.md"
+    else
+      echo "The observer wrote nothing, so here are the channels' own summaries."; echo
+      for channel in "$@"; do
+        echo "**$channel**"; echo
+        python "$CLIPY_AGENT_DIR/events.py" final "/tmp/agent/$channel/events.jsonl"; echo
+      done
+    fi
+    echo; echo "---"
+    for channel in "$@"; do printf '%s: %s  \n' "$channel" "$(head -n 1 "/tmp/agent/$channel/footer")"; done
+    python "$CLIPY_AGENT_DIR/events.py" footer "$work/events.jsonl" "$observed" \
+      | sed 's/^/observer: /; s/ · [0-9]* tool calls\{0,1\}$//'
+  } > "$work/report.md"
+  cat "$work/report.md"
 }
 
 failed=0
 for channel in "$@"; do
   run_channel "$channel" || failed=1
 done
+report "$@"
+# A Matrix outage never fails the run.
+if [ -n "${MATRIX_ACCESS_TOKEN:-}" ]; then
+  python -m clipy.matrix send /tmp/agent/observer/report.md \
+    || echo "clipy: Matrix report failed" >&2
+fi
 exit "$failed"
