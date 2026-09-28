@@ -8,8 +8,6 @@ from urllib.parse import parse_qs, urlparse
 
 import requests
 
-from . import costs
-
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 logger = logging.getLogger(__name__)
@@ -23,7 +21,7 @@ def openrouter_request(api_key: str, body: dict, timeout: int) -> dict[str, Any]
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         },
-        json={**body, "usage": {"include": True}},
+        json=body,
         timeout=timeout,
     )
     if not resp.ok:
@@ -37,9 +35,6 @@ def openrouter_request(api_key: str, body: dict, timeout: int) -> dict[str, Any]
         else:
             message = str(error)
         raise RuntimeError(f"OpenRouter error: {message}")
-    cost = (data.get("usage") or {}).get("cost")
-    if isinstance(cost, int | float):
-        costs.record("openrouter", float(cost), body.get("model", ""))
     return data
 
 

@@ -19,7 +19,6 @@ class ModelsConfig:
     clip: str
     image: str
     speech: str
-    assemblyai_usd_per_hour: float
 
 
 @dataclass(frozen=True)
@@ -155,9 +154,6 @@ def load_config(
             clip=_value(models, "clip", str, "google/gemini-3.7-flash"),
             image=_value(models, "image", str, "google/gemini-3.1-flash-image"),
             speech=_value(models, "speech", str, "universal-3-5-pro"),
-            assemblyai_usd_per_hour=float(
-                _value(models, "assemblyai_usd_per_hour", int | float, 0.27)
-            ),
         ),
         thumbnails=ThumbnailConfig(
             illustration_size=_int_pair(thumbnails, "illustration_size", [700, 700]),

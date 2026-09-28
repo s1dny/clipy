@@ -6,7 +6,6 @@ import assemblyai as aai
 import requests
 from rich.progress import SpinnerColumn, TextColumn, TimeElapsedColumn
 
-from . import costs
 from .logging_config import create_progress
 
 logger = logging.getLogger(__name__)
@@ -23,9 +22,7 @@ def build_transcription_config(speech_model: str) -> aai.TranscriptionConfig:
     )
 
 
-def transcribe_audio(
-    audio_path: Path, api_key: str, speech_model: str, usd_per_hour: float
-) -> dict:
+def transcribe_audio(audio_path: Path, api_key: str, speech_model: str) -> dict:
     """Upload audio to AssemblyAI and get transcript with speaker diarization."""
     logger.info("[2/6] Transcribing audio with AssemblyAI...")
 
@@ -82,10 +79,6 @@ def transcribe_audio(
 
             if status == "completed":
                 logger.info("Transcription complete (%02d:%02d)", mins, secs)
-                audio_hours = (data.get("audio_duration") or 0) / 3600
-                costs.record(
-                    "assemblyai", audio_hours * usd_per_hour, str(audio_path.parent)
-                )
                 return data
             if status == "error":
                 logger.error("Transcription failed after %02d:%02d", mins, secs)

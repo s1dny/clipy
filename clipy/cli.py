@@ -9,7 +9,6 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from . import costs
 from .clips import annotate_clip, cut_clips, extract_clips
 from .common import load_or_compute, write_json_file
 from .config import AppConfig, load_config
@@ -207,7 +206,6 @@ def run_pipeline(run: PipelineRun, paths: ClipyPaths) -> None:
         audio_path,
         run.assemblyai_key,
         run.config.models.speech,
-        run.config.models.assemblyai_usd_per_hour,
         skip_message="[2/6] Transcribing audio with AssemblyAI... skipped: transcript already exists",
     )
     sentences = load_or_compute(
@@ -251,7 +249,6 @@ def main() -> None:
     except ValueError as exc:
         parser.error(str(exc))
     setup_logging()
-    costs.configure(paths.costs_file)
 
     if args.url == "auth":
         authorize(paths.token_file, paths.project_root)

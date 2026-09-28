@@ -28,10 +28,6 @@ class ClipyPaths:
         return self.work_root / "jobs.json"
 
     @property
-    def costs_file(self) -> Path:
-        return self.work_root / "costs.jsonl"
-
-    @property
     def prompt_overrides_file(self) -> Path:
         return self.work_root / "prompt_overrides.json"
 

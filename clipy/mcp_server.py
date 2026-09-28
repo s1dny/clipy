@@ -15,7 +15,7 @@ import re
 import shutil
 import tempfile
 import time
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
@@ -36,7 +36,7 @@ from starlette.responses import PlainTextResponse
 from starlette.routing import Route
 from yt_dlp.utils import download_range_func
 
-from . import costs, matrix, reach
+from . import matrix, reach
 from .cli import build_paths, load_app_config, make_run, run_pipeline
 from .common import extract_video_id, read_json_file, run_cmd, write_json_file
 from .config import PROMPT_KEYS, AppConfig
@@ -200,14 +200,6 @@ def _analytics(**query: Any) -> list[dict]:
     return [dict(zip(names, row, strict=True)) for row in response.get("rows", [])]
 
 
-def _spend_since(start: date) -> float:
-    return sum(
-        entry["usd"]
-        for entry in costs.load(paths.costs_file)
-        if _parse_time(entry["at"]).date() >= start
-    )
-
-
 def _channel_report(days: int) -> dict:
     end = datetime.now(UTC).date()
     start = end - timedelta(days=days)
@@ -252,22 +244,20 @@ def _channel_report(days: int) -> dict:
                 **ctr.get(row["video"], {}),
             }
         )
-    revenue = sum(d["estimatedRevenue"] for d in daily)
-    spend = _spend_since(start)
     return {
         "window": window,
+        "data_through": daily[-1]["day"] if daily else None,
         "note": (
-            "Revenue lags 2-3 days, and impressions/ctr_percent (from YouTube's "
-            "daily reach reports) about 2 days; the last days of the window read low."
+            "YouTube's analytics run about 3 days behind: data_through is the "
+            "newest day there is, not yesterday, and impressions/ctr_percent "
+            "(daily reach reports) lag about 2 days."
             + ("" if isinstance(reach_data, dict) else f" Reach: {reach_data}")
         ),
         "totals": {
             "views": sum(d["views"] for d in daily),
             "watch_hours": round(sum(d["estimatedMinutesWatched"] for d in daily) / 60),
             "subscribers_gained": sum(d["subscribersGained"] for d in daily),
-            "revenue_usd": round(revenue, 2),
-            "api_spend_usd": round(spend, 2),
-            "profit_usd": round(revenue - spend, 2),
+            "revenue_usd": round(sum(d["estimatedRevenue"] for d in daily), 2),
         },
         "daily": [
             {
@@ -439,7 +429,6 @@ def _sample_source(url: str, minutes: int) -> dict:
             sample,
             os.environ["ASSEMBLYAI_API_KEY"],
             config.models.speech,
-            config.models.assemblyai_usd_per_hour,
         )
 
     words: dict[str, int] = {}
@@ -591,8 +580,9 @@ def tool(annotations: ToolAnnotations):
 @tool(READ)
 async def channel_report(days: int = 28) -> dict:
     """Channel performance for the last `days` days: totals (views, watch hours,
-    revenue, API spend, profit), daily views/revenue, and every video with views
-    in the window ranked by revenue (with RPM, retention %, lifetime views, and
+    subscribers, ad revenue), daily views and revenue up to `data_through` (the
+    newest day YouTube has, about 3 days back), and every video with views in
+    the window ranked by revenue (with RPM, retention %, lifetime views, and
     thumbnail impressions and click-through rate)."""
     return await _sync(_channel_report, days)
 
@@ -646,7 +636,7 @@ async def sample_source(url: str, minutes_per_sample: int = 3) -> dict:
     short audio samples (at 20%, 50% and 80% of the video), transcribes them
     with speaker labels, and returns each speaker's share of the words plus the
     labelled transcript, so you can tell whether Jonathan Blow is the main
-    speaker and what he talks about. Costs about $0.04; takes a minute or two."""
+    speaker and what he talks about. Takes a minute or two."""
     return await _sync(_sample_source, url, max(1, min(minutes_per_sample, 5)))
 
 
@@ -655,7 +645,7 @@ async def process_source(url: str) -> dict:
     """Start turning a source video into clips in the background: download,
     transcribe, pick 8-20 minute clips with the clip prompt, cut them, draw
     thumbnails, and add them to the queue as pending. Takes 20-90 minutes and
-    costs API money (roughly $0.30/hour of audio plus LLM calls). Nothing is
+    uses paid transcription and LLM calls. Nothing is
     uploaded. Returns a job; follow it with wait_for_job."""
     extract_video_id(url)  # reject anything that is not a video URL
     return jobs.submit("process_source", {"url": url})
@@ -986,7 +976,6 @@ def main() -> None:
         raise SystemExit("CLIPY_MCP_TOKEN must be set to at least 32 characters.")
 
     paths.work_root.mkdir(parents=True, exist_ok=True)
-    costs.configure(paths.costs_file)
     _config()  # fail fast on a broken config.toml
     jobs = JobRunner(
         paths.jobs_file, {"process_source": _process_job, "publish": _publish_job}

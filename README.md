@@ -2,8 +2,7 @@
 
 Clipy is a fully autonomous YouTube automation bot. It runs a clip channel on
 its own, turning long-form videos of a speaker (talks, podcasts, interviews,
-streams) into standalone clips, with one goal: maximise YouTube ad revenue
-minus what it spends on APIs.
+streams) into standalone clips, with one goal: maximise YouTube ad revenue.
 
 Every day an AI agent reads the channel's analytics, decides what to change,
 finds and clips new source videos, schedules uploads, retitles and
@@ -33,8 +32,7 @@ cannot do.
   daily review, tuning and reporting routine. Changing the policy means
   editing the prompt; the server enforces none of it.
 - **The MCP server** (`clipy-mcp`) is mechanism only. Its tools cover
-  analytics and revenue (profit is revenue minus the API spend in
-  `costs.jsonl`), thumbnail impressions and click-through (from the YouTube
+  ad revenue and analytics, thumbnail impressions and click-through (from the YouTube
   Reporting API's daily reach reports), source discovery and speaker checks,
   background clipping and upload jobs, clip and live-video editing, prompt
   overrides, a strategy notebook that is the agent's memory between runs, and
@@ -159,7 +157,6 @@ clipy/
   reach.py           Impressions and click-through from reach reports
   matrix.py          The daily Matrix report
   queue.py           The channel's clip queue
-  costs.py           API spend ledger
   config.py, paths.py, common.py, logging_config.py
 tests/               End-to-end tests against the running server
 thumbnails/          Channel thumbnail templates
