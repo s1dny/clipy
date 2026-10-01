@@ -1,6 +1,6 @@
 """The stats at the top of the daily report: earnings, views and subscribers
 for every channel, on the newest day YouTube has data for and over the 30
-days up to it, against the 30 days before."""
+days up to it."""
 
 from datetime import UTC, date, datetime, timedelta
 
@@ -8,6 +8,7 @@ from .analytics import _query
 from .channel import Channel, all_channels
 
 WINDOW = 30
+CHANNEL_LABELS = {"blow": "JBlow", "science": "Science", "philosophy": "Philosophy"}
 
 
 def _daily(channel: Channel) -> dict[str, dict]:
@@ -38,14 +39,6 @@ def _total(daily: dict[str, dict], metric: str, first: date, last: date) -> floa
     )
 
 
-def _change(now: float, before: float) -> str:
-    if not before:
-        return "🟩 **new**" if now > 0 else "⬜ **0.0%**"
-    percent = (now - before) / abs(before) * 100
-    square = "🟩" if percent > 0 else "🟥" if percent < 0 else "⬜"
-    return f"{square} **{percent:+.1f}%**"
-
-
 def _compact(n: float) -> str:
     n = round(n)
     if abs(n) >= 1_000_000:
@@ -56,11 +49,11 @@ def _compact(n: float) -> str:
 
 
 SECTIONS = (
-    ("earnings", "💰 **Earnings**", lambda n: f"${n:,.2f}", lambda n: f"${n:,.2f}"),
-    ("views", "👁️ **Views**", lambda n: f"{round(n):,}", _compact),
+    ("earnings", "Earnings", lambda n: f"${n:,.2f}", lambda n: f"${n:,.2f}"),
+    ("views", "Views", lambda n: f"{round(n):,}", _compact),
     (
         "subscribers",
-        "👥 **Subscribers**",
+        "Subscribers",
         lambda n: f"{round(n):+,}",
         lambda n: f"{round(n):+,}",
     ),
@@ -68,11 +61,16 @@ SECTIONS = (
 
 
 def report() -> str:
-    channels = all_channels()
+    order = {name: index for index, name in enumerate(CHANNEL_LABELS)}
+    channels = sorted(
+        all_channels(), key=lambda channel: order.get(channel.name, len(order))
+    )
     names, daily = {}, {}
     for channel in channels:
         mine = channel.youtube().channels().list(part="snippet", mine=True).execute()
-        names[channel.name] = mine["items"][0]["snippet"]["title"]
+        names[channel.name] = CHANNEL_LABELS.get(
+            channel.name, mine["items"][0]["snippet"]["title"]
+        )
         daily[channel.name] = _daily(channel)
     # The newest day every channel with data has reached (about 3 days ago).
     latest = [max(d) for d in daily.values() if d]
@@ -80,30 +78,24 @@ def report() -> str:
         return "No analytics yet."
     day = date.fromisoformat(min(latest))
     now = (day - timedelta(days=WINDOW - 1), day)
-    before = (now[0] - timedelta(days=WINDOW), now[0] - timedelta(days=1))
     label = f"{day:%a} {day.day} {day:%b}"
 
-    lines = []
+    lines = [label + "  "]
     for metric, heading, one_day, window in SECTIONS:
         rows = {
             name: (
                 daily[name].get(day.isoformat(), {}).get(metric, 0),
                 _total(daily[name], metric, *now),
-                _total(daily[name], metric, *before),
             )
             for name in daily
         }
-        on_day, total, previous = (sum(r[i] for r in rows.values()) for i in range(3))
+        on_day, total = (sum(r[i] for r in rows.values()) for i in range(2))
+        lines.append(
+            f"{heading}: **{one_day(on_day)}** "
+            f"(Last {WINDOW} days: **{window(total)}**)  "
+        )
         lines += [
-            heading,
-            f"**{label}:** {one_day(on_day)}  ",
-            f"**Last {WINDOW} days:** {window(total)} — {_change(total, previous)}",
-            "",
-        ]
-        lines += [
-            f"• **{names[name]}:** {one_day(d)} on {day.day} {day:%b} · "
-            f"{window(t)} last {WINDOW}d — {_change(t, p)}  "
-            for name, (d, t, p) in rows.items()
+            f"• {names[name]}: **{one_day(d)}**  " for name, (d, _) in rows.items()
         ]
         lines.append("")
     return "\n".join(lines).rstrip()
