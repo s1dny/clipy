@@ -35,6 +35,7 @@ COPY clipy ./clipy
 COPY thumbnails/*.jpg ./thumbnails/
 COPY agent ./agent
 COPY README.md ./
+COPY site ./site
 RUN uv sync --frozen --no-dev
 
 ENV PATH=/app/.venv/bin:$PATH \
