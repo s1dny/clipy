@@ -2,10 +2,14 @@
 for every channel, on the newest day YouTube has data for and over the 30
 days up to it."""
 
+import logging
 from datetime import UTC, date, datetime, timedelta
 
 from .analytics import _query
 from .channel import Channel, all_channels
+from .upload import YouTubeAuthError
+
+logger = logging.getLogger(__name__)
 
 WINDOW = 30
 CHANNEL_LABELS = {"blow": "JBlow", "science": "Science", "philosophy": "Philosophy"}
@@ -65,22 +69,46 @@ def report() -> str:
     channels = sorted(
         all_channels(), key=lambda channel: order.get(channel.name, len(order))
     )
-    names, daily = {}, {}
+    names, daily, unavailable = {}, {}, {}
     for channel in channels:
-        mine = channel.youtube().channels().list(part="snippet", mine=True).execute()
-        names[channel.name] = CHANNEL_LABELS.get(
-            channel.name, mine["items"][0]["snippet"]["title"]
-        )
-        daily[channel.name] = _daily(channel)
+        names[channel.name] = CHANNEL_LABELS.get(channel.name, channel.name)
+        try:
+            if channel.name not in CHANNEL_LABELS:
+                mine = (
+                    channel.youtube()
+                    .channels()
+                    .list(part="snippet", mine=True)
+                    .execute()
+                )
+                names[channel.name] = mine["items"][0]["snippet"]["title"]
+            data = _daily(channel)
+            if data:
+                daily[channel.name] = data
+            else:
+                unavailable[channel.name] = "no analytics yet"
+        except YouTubeAuthError:
+            logger.exception("YouTube sign-in unavailable for %s", channel.name)
+            unavailable[channel.name] = (
+                f"reconnect YouTube with clipy auth {channel.name}"
+            )
+        except Exception as exc:
+            logger.exception("Analytics unavailable for %s", channel.name)
+            unavailable[channel.name] = (
+                f"analytics request failed ({type(exc).__name__})"
+            )
     # The newest day every channel with data has reached (about 3 days ago).
     latest = [max(d) for d in daily.values() if d]
     if not latest:
-        return "No analytics yet."
+        return "Analytics unavailable.\n" + "\n".join(
+            f"• {names[name]}: {reason}" for name, reason in unavailable.items()
+        )
     day = date.fromisoformat(min(latest))
     now = (day - timedelta(days=WINDOW - 1), day)
     label = f"{day:%a} {day.day} {day:%b}"
 
     lines = [label + "  "]
+    if unavailable:
+        lines += ["Totals include available channels only.  ", ""]
     for metric, heading, one_day, window in SECTIONS:
         rows = {
             name: (
@@ -94,8 +122,11 @@ def report() -> str:
             f"{heading}: **{one_day(on_day)}** "
             f"(Last {WINDOW} days: **{window(total)}**)  "
         )
-        lines += [
-            f"• {names[name]}: **{one_day(d)}**  " for name, (d, _) in rows.items()
-        ]
+        for channel in channels:
+            name = channel.name
+            if name in unavailable:
+                lines.append(f"• {names[name]}: unavailable ({unavailable[name]})  ")
+            else:
+                lines.append(f"• {names[name]}: **{one_day(rows[name][0])}**  ")
         lines.append("")
     return "\n".join(lines).rstrip()

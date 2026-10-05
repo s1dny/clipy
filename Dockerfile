@@ -5,13 +5,13 @@ FROM debian:trixie-slim AS codex
 # The agent (agent/run.sh) is Codex CLI on a ChatGPT login.
 # Codex runs tool calls through codex-code-mode-host, which ships as a separate
 # release asset and must sit beside codex.
-ARG CODEX_VERSION=0.158.0
+ARG CODEX_VERSION=0.160.0
 ARG CODEX_RELEASE=https://github.com/openai/codex/releases/download/rust-v${CODEX_VERSION}
 ADD ${CODEX_RELEASE}/codex-x86_64-unknown-linux-musl.tar.gz /codex.tgz
 ADD ${CODEX_RELEASE}/codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz /host.tgz
 RUN printf '%s  %s\n' \
-        af9f5aa6e6662accf9d707cef0d9ca083880a173a9c2b6c22947edb7830e5778 /codex.tgz \
-        5455c64be4ba371444710895aff6d74d653985a3bfc454a8b7fe42d6e6d11e3d /host.tgz \
+        306865417d4ee7a927785852910a527f41e1e159add390ac5ae3accb67d44a13 /codex.tgz \
+        ac6cd6288f0e39f46a33eba1cfd37711651f14f33dbc73d6a1b82eb45e038cac /host.tgz \
         | sha256sum -c - \
     && mkdir /out \
     && for f in /codex.tgz /host.tgz; do tar xzf "$f" -C /out; done \

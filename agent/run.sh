@@ -20,6 +20,7 @@ set -o pipefail 2>/dev/null || true
 : "${CLIPY_DATA_DIR:=/data}"
 : "${CLIPY_MCP_TOKEN:?}"
 : "${CLIPY_AGENT_DIR:=/app/agent}"
+: "${CLIPY_AGENT_WORK_DIR:=/tmp/agent}"
 export CLIPY_MCP_TOKEN CLIPY_MCP_URL CODEX_HOME
 
 if [ ! -s "$CODEX_HOME/auth.json" ]; then
@@ -33,7 +34,7 @@ codex_run() {
     --skip-git-repo-check \
     --ephemeral \
     --dangerously-bypass-approvals-and-sandbox \
-    --model "${CODEX_MODEL:-gpt-6-sol}" \
+    --model "${CODEX_MODEL:-gpt-6.1-sol}" \
     -c "model_reasoning_effort=\"${CODEX_REASONING:-medium}\"" \
     -c 'cli_auth_credentials_store="file"' \
     -c 'web_search="live"' \
@@ -42,28 +43,39 @@ codex_run() {
 
 run_channel() {
   channel=$1
-  work=/tmp/agent/$channel
+  work=$CLIPY_AGENT_WORK_DIR/$channel
   mkdir -p "$work"
   log=$work/events.jsonl
   started=$(date +%s)
   status=0
   echo "=== $channel"
-  # Codex's own sandbox (bwrap) cannot create namespaces in the pod, so the
-  # container is the sandbox: it mounts the data directory read-only except
-  # for the Codex login and the headshots, which the agent downloads and crops
-  # itself.
-  { cat "$CLIPY_AGENT_DIR/prompt.md" "$CLIPY_AGENT_DIR/channels/$channel.md"
-    if [ -n "${CLIPY_AGENT_NOTE:-}" ]; then
-      printf '\nOne-off instruction from the owner for this run (it overrides the rules above where they conflict):\n%s\n' "$CLIPY_AGENT_NOTE"
-    fi; } \
-    | codex_run \
-      --cd "$work" \
-      -c "mcp_servers.clipy.url=\"$CLIPY_MCP_URL/$channel\"" \
-      -c 'mcp_servers.clipy.bearer_token_env_var="CLIPY_MCP_TOKEN"' \
-      -c 'mcp_servers.clipy.required=true' \
-      -c 'mcp_servers.clipy.default_tools_approval_mode="approve"' \
-      -c 'mcp_servers.clipy.tool_timeout_sec=900' \
-    | tee "$log" | python "$CLIPY_AGENT_DIR/events.py" stream || status=$?
+  attempt=1
+  while :; do
+    status=0
+    # Codex's own sandbox (bwrap) cannot create namespaces in the pod, so the
+    # container is the sandbox: it mounts the data directory read-only except
+    # for the Codex login and the headshots, which the agent downloads and crops
+    # itself.
+    { cat "$CLIPY_AGENT_DIR/prompt.md" "$CLIPY_AGENT_DIR/channels/$channel.md"
+      if [ -n "${CLIPY_AGENT_NOTE:-}" ]; then
+        printf '\nOne-off instruction from the owner for this run (it overrides the rules above where they conflict):\n%s\n' "$CLIPY_AGENT_NOTE"
+      fi; } \
+      | codex_run \
+        --cd "$work" \
+        -c "mcp_servers.clipy.url=\"$CLIPY_MCP_URL/$channel\"" \
+        -c 'mcp_servers.clipy.bearer_token_env_var="CLIPY_MCP_TOKEN"' \
+        -c 'mcp_servers.clipy.required=true' \
+        -c 'mcp_servers.clipy.default_tools_approval_mode="approve"' \
+        -c 'mcp_servers.clipy.tool_timeout_sec=900' \
+      | tee "$log" | python "$CLIPY_AGENT_DIR/events.py" stream || status=$?
+
+    if [ "$attempt" -ge 3 ] || ! python "$CLIPY_AGENT_DIR/events.py" retryable "$log"; then
+      break
+    fi
+    echo "Codex usage limit before any tools ran; retrying $channel in 15 minutes (attempt $((attempt + 1))/3)."
+    sleep "${CLIPY_QUOTA_RETRY_SECONDS:-900}"
+    attempt=$((attempt + 1))
+  done
 
   # Codex exits 0 even when every tool call failed, so a run only counts if it
   # reached the server; the same pass works out the run's stats line.
@@ -79,12 +91,12 @@ run_summary() {
   echo "### $1"
   echo
   echo "Log:"
-  python "$CLIPY_AGENT_DIR/events.py" stream < "/tmp/agent/$1/events.jsonl" | sed 's/^/    /'
+  python "$CLIPY_AGENT_DIR/events.py" stream < "$CLIPY_AGENT_WORK_DIR/$1/events.jsonl" | sed 's/^/    /'
   echo
   echo "Final message:"
-  python "$CLIPY_AGENT_DIR/events.py" final "/tmp/agent/$1/events.jsonl"
+  python "$CLIPY_AGENT_DIR/events.py" final "$CLIPY_AGENT_WORK_DIR/$1/events.jsonl"
   echo
-  cat "/tmp/agent/$1/footer"
+  cat "$CLIPY_AGENT_WORK_DIR/$1/footer"
   echo
 }
 
@@ -102,7 +114,7 @@ PY
 }
 
 report() {
-  work=/tmp/agent/observer
+  work=$CLIPY_AGENT_WORK_DIR/observer
   mkdir -p "$work"
   stats_header > "$work/stats.md" \
     || echo "(The stats header is unavailable: the server did not answer.)" > "$work/stats.md"
@@ -117,17 +129,18 @@ report() {
   observed=$(( $(date +%s) - started ))
 
   { cat "$work/stats.md"; echo; echo "---"; echo
-    if [ -s "$work/observer.md" ]; then
+    if [ -s "$work/observer.md" ] && ! grep -q '^Run failed:' "$work/observer.md"; then
       cat "$work/observer.md"
     else
-      echo "The observer wrote nothing, so here are the channels' own summaries."; echo
+      cat "$work/observer.md"
+      echo "Here are the channels' own summaries."; echo
       for channel in "$@"; do
         echo "**$channel**"; echo
-        python "$CLIPY_AGENT_DIR/events.py" final "/tmp/agent/$channel/events.jsonl"; echo
+        python "$CLIPY_AGENT_DIR/events.py" final "$CLIPY_AGENT_WORK_DIR/$channel/events.jsonl"; echo
       done
     fi
     echo; echo "---"
-    for channel in "$@"; do printf '%s: %s  \n' "$channel" "$(head -n 1 "/tmp/agent/$channel/footer")"; done
+    for channel in "$@"; do printf '%s: %s  \n' "$channel" "$(head -n 1 "$CLIPY_AGENT_WORK_DIR/$channel/footer")"; done
     python "$CLIPY_AGENT_DIR/events.py" footer "$work/events.jsonl" "$observed" \
       | sed 's/^/observer: /; s/ · [0-9]* tool calls\{0,1\}$//'
   } > "$work/report.md"
@@ -141,7 +154,7 @@ done
 report "$@"
 # A Matrix outage never fails the run.
 if [ -n "${MATRIX_ACCESS_TOKEN:-}" ]; then
-  python -m clipy.matrix send /tmp/agent/observer/report.md \
+  python -m clipy.matrix send "$CLIPY_AGENT_WORK_DIR/observer/report.md" \
     || echo "clipy: Matrix report failed" >&2
 fi
 exit "$failed"

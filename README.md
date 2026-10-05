@@ -145,8 +145,9 @@ are saved in the channel's `prompt_overrides.json` and take priority over
 | `CLIPY_CONFIG` | server, CLI | Path to `config.toml` (defaults to the one in the repo) |
 | `CLIPY_TIMEZONE` | server | Timezone for notebook entries (default `Australia/Sydney`) |
 | `YOUTUBE_CLIENT_SECRETS` | `clipy auth` | Google OAuth client file (default `client_secrets.json`) |
-| `CODEX_MODEL`, `CODEX_REASONING` | agent | Model and reasoning effort (default `gpt-6-sol`, `medium`) |
+| `CODEX_MODEL`, `CODEX_REASONING` | agent | Model and reasoning effort (default `gpt-6.1-sol`, `medium`) |
 | `CLIPY_AGENT_NOTE` | agent | A one-off instruction added to every channel's prompt for a manual run |
+| `CLIPY_QUOTA_RETRY_SECONDS` | agent | Delay before retrying a Codex usage-limit failure that ran no tools (default 900 seconds, at most three attempts) |
 | `MATRIX_ACCESS_TOKEN` | agent | The report bot's Matrix token; without it no report is sent |
 | `MATRIX_NOTIFY_USER` | agent | Who the bot invites to its report room the first time |
 | `MATRIX_HOMESERVER` | agent | Matrix homeserver URL (defaults to the one in the cluster) |
