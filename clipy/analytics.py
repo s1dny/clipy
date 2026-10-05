@@ -75,6 +75,7 @@ def channel_videos(channel: Channel, refresh: bool = False) -> list[dict]:
                     "description": v["snippet"].get("description", ""),
                     "tags": v["snippet"].get("tags", []),
                     "privacy": status["privacyStatus"],
+                    "upload_status": status.get("uploadStatus"),
                     "publish_time": status.get("publishAt")
                     or v["snippet"]["publishedAt"],
                     "duration_seconds": _seconds(v["contentDetails"]["duration"]),

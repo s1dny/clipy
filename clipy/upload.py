@@ -1,5 +1,7 @@
 import logging
 import os
+import ssl
+import time
 from pathlib import Path
 
 from .clips import chapters_text
@@ -119,6 +121,7 @@ def upload_video(youtube, item: dict, description_template: str, category_id: st
     item has `publish_at`, otherwise public straight away. Records the video
     id on the item; raises on failure."""
     from googleapiclient.http import MediaFileUpload
+    from httplib2 import HttpLib2Error
 
     clip_path = Path(item["clip_path"])
     body = {
@@ -144,8 +147,22 @@ def upload_video(youtube, item: dict, description_template: str, category_id: st
         ),
     )
     response = None
+    failures = 0
     while response is None:
-        _status, response = request.next_chunk()
+        try:
+            _status, response = request.next_chunk(num_retries=5)
+            failures = 0
+        except ConnectionError, TimeoutError, ssl.SSLError, HttpLib2Error:
+            if failures >= 5:
+                raise
+            failures += 1
+            logger.warning(
+                "Upload connection interrupted; resuming the same session (attempt %s/5)",
+                failures,
+            )
+            # next_chunk queries this session's received bytes after a transport
+            # error, so retrying it cannot insert a second video.
+            time.sleep(2 ** (failures - 1))
     item["youtube_id"] = response["id"]
     item["youtube_url"] = f"https://youtube.com/watch?v={response['id']}"
     logger.info("Uploaded %s", item["youtube_url"])

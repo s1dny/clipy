@@ -108,7 +108,38 @@ def _queue_view(item: dict) -> dict:
 def _publish_job(name: str, args: dict) -> str:
     channel = Channel(name)
     queue = load_queue(channel.queue_file)
-    item = _pending(queue, args["item_id"])
+    item = _find_item(queue, args["item_id"])
+    if item["status"] == "failed":
+        # A lost response can follow a successful upload. Reconcile with
+        # YouTube before starting another resumable session.
+        source = item_id(item).split(":")[0]
+        matches = [
+            video
+            for video in analytics.channel_videos(channel, refresh=True)
+            if (
+                video["id"] == item.get("youtube_id")
+                or (video["title"] == item["title"] and source in video["description"])
+            )
+        ]
+        if len(matches) > 1:
+            raise ValueError(
+                "Multiple YouTube uploads match this failed clip; inspect them before retrying."
+            )
+        if matches:
+            if matches[0].get("upload_status") not in {"uploaded", "processed"}:
+                raise ValueError(
+                    "A matching YouTube upload is not complete; check its status before retrying."
+                )
+            item["youtube_id"] = matches[0]["id"]
+            item["youtube_url"] = f"https://youtube.com/watch?v={matches[0]['id']}"
+            set_thumbnail(channel.youtube(), item)
+            item["status"] = "uploaded"
+            item["uploaded_at"] = datetime.now(UTC).isoformat()
+            write_json_file(channel.queue_file, queue)
+            Path(item["clip_path"]).unlink(missing_ok=True)
+            return item["youtube_url"]
+    elif item["status"] != "pending":
+        raise ValueError(f"Clip is {item['status']}, not pending or failed.")
     item["publish_at"] = args.get("publish_at")
     config = channel.config().channel
     try:
@@ -393,14 +424,20 @@ async def discard_clip(clip_id: str, reason: str) -> dict:
 
 @tool(WRITE)
 async def publish_clip(clip_id: str, publish_at: str | None = None) -> dict:
-    """Upload a pending clip. With `publish_at` (ISO 8601, e.g.
+    """Upload a pending clip, or retry a failed one after checking YouTube
+    for an upload whose completion response was lost (without duplicating it).
+    With `publish_at` (ISO 8601, e.g.
     2026-09-29T14:00:00Z) it goes up private and YouTube publishes it then;
     without it, it goes public as soon as it uploads. Queued uploads run one
     after another. Returns a job; follow it with wait_for_job."""
-    _pending(_queue(), clip_id)
+    item = _find_item(_queue(), clip_id)
+    if item["status"] not in {"pending", "failed"}:
+        raise ValueError(f"Clip is {item['status']}, not pending.")
     if any(j["args"]["item_id"] == clip_id for j in jobs.active(ch().name, "publish")):
         raise ValueError(f"{clip_id} is already queued for upload.")
     when = None
+    if item["status"] == "failed" and publish_at is None:
+        publish_at = item.get("publish_at")
     if publish_at:
         parsed = datetime.fromisoformat(publish_at)
         when = (parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)).astimezone(UTC)
