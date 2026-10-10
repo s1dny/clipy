@@ -16,4 +16,11 @@ Write, in Markdown, short enough to read in two minutes:
 
 Use real details from the logs and files, never guesses. Your final message must be the report section itself and nothing else: no preamble, no sign-off, no stats header.
 
+Routine stalled-upload recovery is authorized on any day through repair_upload.
+Flag an agent that only reports a repairable private upload back to the owner
+instead of trying recovery. Do not praise duplicate avoidance as resolving a
+broken upload. Report the replacement's actual processing state and schedule.
+Distinguish provisional current counters from delayed CTR, watch time and
+revenue; an experiment cannot be evaluated with data from before its change.
+
 Stats header:

@@ -60,7 +60,7 @@ def channel_videos(channel: Channel, refresh: bool = False) -> list[dict]:
         batch = (
             youtube.videos()
             .list(
-                part="snippet,statistics,contentDetails,status",
+                part="snippet,statistics,contentDetails,status,processingDetails",
                 id=",".join(ids[start : start + 50]),
             )
             .execute()
@@ -76,6 +76,16 @@ def channel_videos(channel: Channel, refresh: bool = False) -> list[dict]:
                     "tags": v["snippet"].get("tags", []),
                     "privacy": status["privacyStatus"],
                     "upload_status": status.get("uploadStatus"),
+                    "processing_status": v.get("processingDetails", {}).get(
+                        "processingStatus"
+                    ),
+                    "processing_failure_reason": v.get("processingDetails", {}).get(
+                        "processingFailureReason"
+                    ),
+                    "failure_reason": status.get("failureReason"),
+                    "rejection_reason": status.get("rejectionReason"),
+                    "uploaded_at": v["snippet"]["publishedAt"],
+                    "thumbnails": v["snippet"].get("thumbnails", {}),
                     "publish_time": status.get("publishAt")
                     or v["snippet"]["publishedAt"],
                     "duration_seconds": _seconds(v["contentDetails"]["duration"]),
@@ -109,7 +119,7 @@ def _query(channel: Channel, **query: Any) -> list[dict]:
     return [dict(zip(names, row, strict=True)) for row in response.get("rows", [])]
 
 
-def channel_report(channel: Channel, days: int, rank_by: str) -> dict:
+def channel_report(channel: Channel, days: int, rank_by: str, limit: int = 20) -> dict:
     if rank_by not in RANKINGS:
         raise ValueError(f"rank_by is one of {sorted(RANKINGS)}.")
     end = datetime.now(UTC).date()
@@ -117,7 +127,7 @@ def channel_report(channel: Channel, days: int, rank_by: str) -> dict:
     window = {"startDate": start.isoformat(), "endDate": end.isoformat()}
     daily = _query(
         channel,
-        metrics="views,estimatedMinutesWatched,subscribersGained,estimatedRevenue",
+        metrics="views,estimatedMinutesWatched,subscribersGained",
         dimensions="day",
         sort="day",
         **window,
@@ -126,13 +136,38 @@ def channel_report(channel: Channel, days: int, rank_by: str) -> dict:
         channel,
         metrics=(
             "views,estimatedMinutesWatched,averageViewDuration,"
-            "averageViewPercentage,subscribersGained,estimatedRevenue"
+            "averageViewPercentage,subscribersGained"
         ),
         dimensions="video",
-        sort=f"-{RANKINGS[rank_by]}",
+        sort="-estimatedMinutesWatched",
         maxResults=200,
         **window,
     )
+    revenue_daily = _query(
+        channel, metrics="estimatedRevenue", dimensions="day", sort="day", **window
+    )
+    revenue_videos = _query(
+        channel,
+        metrics="estimatedRevenue",
+        dimensions="video",
+        sort="-estimatedRevenue",
+        maxResults=200,
+        **window,
+    )
+    revenue = {r["video"]: r["estimatedRevenue"] for r in revenue_videos}
+    if rank_by == "revenue":
+        known = {r["video"] for r in per_video}
+        missing = [r["video"] for r in revenue_videos if r["video"] not in known]
+        for start_index in range(0, len(missing), 50):
+            per_video += _query(
+                channel,
+                metrics="views,estimatedMinutesWatched,averageViewDuration,averageViewPercentage,subscribersGained",
+                dimensions="video",
+                filters="video==" + ",".join(missing[start_index : start_index + 50]),
+                maxResults=50,
+                **window,
+            )
+        per_video.sort(key=lambda r: revenue.get(r["video"], 0), reverse=True)
     by_id = {v["id"]: v for v in channel_videos(channel, refresh=True)}
     reach_data = _reach(channel)
     ctr = reach.totals(reach_data, start, end) if isinstance(reach_data, dict) else {}
@@ -149,10 +184,13 @@ def channel_report(channel: Channel, days: int, rank_by: str) -> dict:
                 "lifetime_views": meta.get("views"),
                 "views": views,
                 "watch_hours": round(row["estimatedMinutesWatched"] / 60, 1),
-                "revenue_usd": round(row["estimatedRevenue"], 2),
-                "rpm_usd": round(row["estimatedRevenue"] / views * 1000, 2)
+                "revenue_usd": round(revenue.get(row["video"], 0), 2),
+                "rpm_usd": round(revenue.get(row["video"], 0) / views * 1000, 2)
                 if views
-                else 0,
+                and daily
+                and revenue_daily
+                and daily[-1]["day"] == revenue_daily[-1]["day"]
+                else None,
                 "avg_view_seconds": row["averageViewDuration"],
                 "avg_view_percent": round(row["averageViewPercentage"], 1),
                 "subscribers_gained": row["subscribersGained"],
@@ -162,28 +200,50 @@ def channel_report(channel: Channel, days: int, rank_by: str) -> dict:
     return {
         "window": window,
         "data_through": daily[-1]["day"] if daily else None,
+        "revenue_data_through": revenue_daily[-1]["day"] if revenue_daily else None,
+        "reach_data_through": max(
+            (key.split("|")[0] for key in reach_data["rows"]), default=None
+        )
+        if isinstance(reach_data, dict)
+        else None,
         "note": (
-            "YouTube's analytics run about 3 days behind: data_through is the "
-            "newest day there is, not yesterday, and impressions/ctr_percent "
-            "(daily reach reports) lag about 2 days."
+            "Analytics metrics have separate freshness dates. Revenue does not hold "
+            "back engagement queries. RPM is unavailable when their dates differ. "
+            "Use recent_performance for provisional current counts; evaluate experiments "
+            "only with observations after the change. Reach reports remain delayed."
             + ("" if isinstance(reach_data, dict) else f" Reach: {reach_data}")
         ),
         "totals": {
             "views": sum(d["views"] for d in daily),
-            "watch_hours": round(sum(d["estimatedMinutesWatched"] for d in daily) / 60),
+            "watch_hours": round(
+                sum(d["estimatedMinutesWatched"] for d in daily) / 60, 2
+            ),
             "subscribers_gained": sum(d["subscribersGained"] for d in daily),
-            "revenue_usd": round(sum(d["estimatedRevenue"] for d in daily), 2),
+            "revenue_usd": round(sum(d["estimatedRevenue"] for d in revenue_daily), 2),
         },
         "daily": [
             {
                 "day": d["day"],
                 "views": d["views"],
                 "watch_hours": round(d["estimatedMinutesWatched"] / 60, 1),
-                "revenue_usd": round(d["estimatedRevenue"], 2),
+                "revenue_usd": round(
+                    next(
+                        (
+                            r["estimatedRevenue"]
+                            for r in revenue_daily
+                            if r["day"] == d["day"]
+                        ),
+                        0,
+                    ),
+                    2,
+                )
+                if any(r["day"] == d["day"] for r in revenue_daily)
+                else None,
             }
             for d in daily
         ],
-        "videos": videos,
+        "ranked_video_count": len(videos),
+        "videos": videos[: max(1, min(limit, 200))],
     }
 
 

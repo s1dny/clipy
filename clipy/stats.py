@@ -19,25 +19,35 @@ def _daily(channel: Channel) -> dict[str, dict]:
     end = datetime.now(UTC).date()
     rows = _query(
         channel,
-        metrics="views,estimatedRevenue,subscribersGained,subscribersLost",
+        metrics="views,subscribersGained,subscribersLost",
         dimensions="day",
         sort="day",
         startDate=(end - timedelta(days=2 * WINDOW + 10)).isoformat(),
         endDate=end.isoformat(),
     )
-    return {
+    daily = {
         row["day"]: {
-            "earnings": row["estimatedRevenue"],
             "views": row["views"],
             "subscribers": row["subscribersGained"] - row["subscribersLost"],
         }
         for row in rows
     }
+    revenue = _query(
+        channel,
+        metrics="estimatedRevenue",
+        dimensions="day",
+        sort="day",
+        startDate=(end - timedelta(days=2 * WINDOW + 10)).isoformat(),
+        endDate=end.isoformat(),
+    )
+    for row in revenue:
+        daily.setdefault(row["day"], {})["earnings"] = row["estimatedRevenue"]
+    return daily
 
 
 def _total(daily: dict[str, dict], metric: str, first: date, last: date) -> float:
     return sum(
-        values[metric]
+        values.get(metric, 0)
         for day, values in daily.items()
         if first.isoformat() <= day <= last.isoformat()
     )
@@ -103,23 +113,33 @@ def report() -> str:
             f"• {names[name]}: {reason}" for name, reason in unavailable.items()
         )
     day = date.fromisoformat(min(latest))
-    now = (day - timedelta(days=WINDOW - 1), day)
     label = f"{day:%a} {day.day} {day:%b}"
 
     lines = [label + "  "]
     if unavailable:
         lines += ["Totals include available channels only.  ", ""]
     for metric, heading, one_day, window in SECTIONS:
+        metric_days = [
+            max(d for d, values in data.items() if metric in values)
+            for data in daily.values()
+            if any(metric in values for values in data.values())
+        ]
+        if not metric_days:
+            lines.append(f"{heading}: unavailable  ")
+            continue
+        metric_day = date.fromisoformat(min(metric_days))
+        metric_window = (metric_day - timedelta(days=WINDOW - 1), metric_day)
+        freshness = f" (through {metric_day.isoformat()})" if metric_day != day else ""
         rows = {
             name: (
-                daily[name].get(day.isoformat(), {}).get(metric, 0),
-                _total(daily[name], metric, *now),
+                daily[name].get(metric_day.isoformat(), {}).get(metric, 0),
+                _total(daily[name], metric, *metric_window),
             )
             for name in daily
         }
         on_day, total = (sum(r[i] for r in rows.values()) for i in range(2))
         lines.append(
-            f"{heading}: **{one_day(on_day)}** "
+            f"{heading}{freshness}: **{one_day(on_day)}** "
             f"(Last {WINDOW} days: **{window(total)}**)  "
         )
         for channel in channels:

@@ -116,7 +116,15 @@ def full_description(item: dict, description_template: str) -> str:
     )
 
 
-def upload_video(youtube, item: dict, description_template: str, category_id: str):
+def upload_video(
+    youtube,
+    item: dict,
+    description_template: str,
+    category_id: str,
+    *,
+    private: bool = False,
+    on_uploaded=None,
+):
     """Upload a queued clip with its thumbnail: private and scheduled when the
     item has `publish_at`, otherwise public straight away. Records the video
     id on the item; raises on failure."""
@@ -134,11 +142,15 @@ def upload_video(youtube, item: dict, description_template: str, category_id: st
         "status": (
             {"privacyStatus": "private", "publishAt": item["publish_at"]}
             if item.get("publish_at")
-            else {"privacyStatus": "public"}
+            else {"privacyStatus": "private" if private else "public"}
         ),
     }
 
-    logger.info("Uploading %s (%s)", item["title"], item.get("publish_at") or "public")
+    logger.info(
+        "Uploading %s (%s)",
+        item["title"],
+        item.get("publish_at") or ("private" if private else "public"),
+    )
     request = youtube.videos().insert(
         part="snippet,status",
         body=body,
@@ -166,7 +178,8 @@ def upload_video(youtube, item: dict, description_template: str, category_id: st
     item["youtube_id"] = response["id"]
     item["youtube_url"] = f"https://youtube.com/watch?v={response['id']}"
     logger.info("Uploaded %s", item["youtube_url"])
-
+    if on_uploaded:
+        on_uploaded(item)
     set_thumbnail(youtube, item)
 
 

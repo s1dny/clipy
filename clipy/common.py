@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import subprocess
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -73,8 +74,16 @@ def read_json_file(path: Path) -> Any:
 def write_json_file(path: Path, data: Any) -> None:
     """Write JSON to disk using UTF-8, creating the parent directory if needed."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as file:
-        json.dump(data, file, indent=2)
+    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as file:
+        temporary = Path(file.name)
+        try:
+            json.dump(data, file, indent=2)
+            file.flush()
+            os.fsync(file.fileno())
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
+    temporary.replace(path)
 
 
 def load_or_compute(path: Path, compute_fn: Callable[..., Any], *args: Any) -> Any:

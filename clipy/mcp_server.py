@@ -31,7 +31,16 @@ from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 from starlette.routing import Route
 
-from . import analytics, headshots, sources, stats, thumbnails
+from . import (
+    analytics,
+    headshots,
+    performance,
+    recovery,
+    sources,
+    stats,
+    studio,
+    thumbnails,
+)
 from .channel import PROJECT_ROOT, Channel, all_channels, data_root
 from .common import extract_video_id, read_json_file, write_json_file
 from .config import PROMPT_KEYS
@@ -102,6 +111,8 @@ def _queue_view(item: dict) -> dict:
         "publish_at": item.get("publish_at"),
         "discard_reason": item.get("discard_reason"),
         "thumbnail_pending": item.get("thumbnail_pending", False),
+        "processing_status": item.get("processing_status"),
+        "repair": item.get("repair"),
     }
 
 
@@ -109,7 +120,7 @@ def _publish_job(name: str, args: dict) -> str:
     channel = Channel(name)
     queue = load_queue(channel.queue_file)
     item = _find_item(queue, args["item_id"])
-    if item["status"] == "failed":
+    if item["status"] == "failed" or item.get("youtube_id"):
         # A lost response can follow a successful upload. Reconcile with
         # YouTube before starting another resumable session.
         source = item_id(item).split(":")[0]
@@ -136,7 +147,8 @@ def _publish_job(name: str, args: dict) -> str:
             item["status"] = "uploaded"
             item["uploaded_at"] = datetime.now(UTC).isoformat()
             write_json_file(channel.queue_file, queue)
-            Path(item["clip_path"]).unlink(missing_ok=True)
+            if matches[0].get("upload_status") == "processed":
+                Path(item["clip_path"]).unlink(missing_ok=True)
             return item["youtube_url"]
     elif item["status"] != "pending":
         raise ValueError(f"Clip is {item['status']}, not pending or failed.")
@@ -144,7 +156,11 @@ def _publish_job(name: str, args: dict) -> str:
     config = channel.config().channel
     try:
         upload_video(
-            channel.youtube(), item, config.description_template, config.category_id
+            channel.youtube(),
+            item,
+            config.description_template,
+            config.category_id,
+            on_uploaded=lambda uploaded: recovery.save_item(channel, uploaded),
         )
     except Exception:
         item["status"] = "failed"
@@ -153,7 +169,7 @@ def _publish_job(name: str, args: dict) -> str:
     item["status"] = "uploaded"
     item["uploaded_at"] = datetime.now(UTC).isoformat()
     write_json_file(channel.queue_file, queue)
-    Path(item["clip_path"]).unlink(missing_ok=True)  # YouTube has it now
+    # Keep the MP4 until a later processing check confirms it is playable.
     return item["youtube_url"]
 
 
@@ -213,14 +229,28 @@ def tool(annotations: ToolAnnotations):
 
 
 @tool(READ)
-async def channel_report(days: int = 28, rank_by: str = "revenue") -> dict:
+async def channel_report(
+    days: int = 28, rank_by: str = "revenue", limit: int = 20
+) -> dict:
     """Channel performance for the last `days` days: totals (views, watch hours,
     subscribers, ad revenue), daily views, watch hours and revenue up to
     `data_through` (the newest day YouTube has, about 3 days back), and every
     video with views in the window with its watch hours, revenue, RPM,
     retention %, lifetime views, and thumbnail impressions and click-through
     rate. Videos are ranked by `rank_by`: "revenue" or "watch_hours"."""
-    return await _sync(analytics.channel_report, ch(), days, rank_by)
+    return await _sync(analytics.channel_report, ch(), days, rank_by, limit)
+
+
+@tool(READ)
+async def recent_performance(limit: int = 20) -> dict:
+    """Current video counters and measured 24/48-hour changes from hourly
+    snapshots, plus channel subscribers. Faster provisional signals than
+    Analytics; no invented realtime CTR, revenue or watch hours."""
+    result = await _sync(performance.recent, ch())
+    result["tracked_video_count"] = len(result["videos"])
+    result["videos"] = result["videos"][: max(1, min(limit, 200))]
+    result["studio"] = studio.latest(ch())
+    return result
 
 
 @tool(READ)
@@ -236,10 +266,64 @@ async def list_channel_videos(limit: int = 30) -> list[dict]:
     """The channel's uploads newest first, including scheduled (private) ones,
     with lifetime views/likes/comments and publish time."""
     videos = await _sync(analytics.channel_videos, ch(), True)
+    by_id = {v["id"]: v for v in videos}
+    queue = _queue()
+    changed = False
+    for item in queue:
+        if video := by_id.get(item.get("youtube_id")):
+            for key, value in {
+                "publish_at": video["publish_time"],
+                "processing_status": video["processing_status"],
+            }.items():
+                if item.get(key) != value:
+                    item[key] = value
+                    changed = True
+            if video["upload_status"] == "processed" and video["duration_seconds"] > 0:
+                Path(item["clip_path"]).unlink(missing_ok=True)
+    if changed:
+        write_json_file(ch().queue_file, queue)
     return [
         {k: v for k, v in video.items() if k != "description"}
         for video in videos[:limit]
     ]
+
+
+@tool(READ)
+async def inspect_upload(video_id: str) -> dict:
+    """Get YouTube's actual processing status and failure reason for a Clipy
+    upload. Zero duration or a thumbnail 404 alone do not prove failure."""
+    if not any(
+        i.get("youtube_id") == video_id
+        or i.get("repair", {}).get("original_id") == video_id
+        for i in _queue()
+    ):
+        raise ValueError("Video is not linked to this channel's Clipy queue.")
+    return await _sync(recovery.inspect, ch().youtube(), video_id)
+
+
+@tool(WRITE)
+async def repair_upload(video_id: str, publish_at: str | None = None) -> dict:
+    """Repair a private, unwatched Clipy upload with failed processing or
+    processing stalled for at least 24 hours. Rebuilds and fully re-encodes
+    the original excerpt, uploads privately, verifies processing, transfers
+    its future schedule, then deletes the broken copy. Never retries a policy
+    rejection or replaces a working/public video. Allowed any day. Call again
+    after a processing timeout to resume the same replacement. Returns a job."""
+    if active := jobs.active(ch().name, "repair"):
+        return active[0]
+    if jobs.active(ch().name, "publish"):
+        raise ValueError(
+            "Wait for this channel's active publish jobs before repairing."
+        )
+    if not any(
+        i.get("youtube_id") == video_id
+        or i.get("repair", {}).get("original_id") == video_id
+        for i in _queue()
+    ):
+        raise ValueError("Video is not linked to this channel's Clipy queue.")
+    return jobs.submit(
+        ch().name, "repair", {"video_id": video_id, "publish_at": publish_at}
+    )
 
 
 @tool(READ)
@@ -353,13 +437,23 @@ async def view_thumbnail(clip_id: str | None = None, video_id: str | None = None
             raise ValueError("That clip has no thumbnail; draw one with edit_clip.")
         return Image(data=Path(path).read_bytes(), format="jpeg")
     if video_id:
-        resp = await _sync(
-            requests.get,
-            f"https://i.ytimg.com/vi/{video_id}/maxresdefault.jpg",
-            timeout=30,
+        current = await _sync(
+            lambda: ch().youtube().videos().list(part="snippet", id=video_id).execute()
         )
-        resp.raise_for_status()
-        return Image(data=resp.content, format="jpeg")
+        if not current.get("items"):
+            raise ValueError(f"No video {video_id}.")
+        choices = current["items"][0]["snippet"].get("thumbnails", {})
+        for size in ("maxres", "standard", "high", "medium", "default"):
+            if size not in choices:
+                continue
+            resp = await _sync(requests.get, choices[size]["url"], timeout=30)
+            if resp.status_code == 404:
+                continue
+            resp.raise_for_status()
+            return Image(data=resp.content, format="jpeg")
+        raise ValueError(
+            "YouTube has no available thumbnail rendition; inspect_upload for processing status, or view_thumbnail with clip_id for the local artwork."
+        )
     raise ValueError("Pass clip_id or video_id.")
 
 
@@ -472,9 +566,14 @@ def _update_video(
     }
     if len(body["title"]) > 100:
         raise ValueError("YouTube titles are at most 100 characters.")
+    baseline = performance.baseline(ch(), video_id)
     youtube.videos().update(
         part="snippet", body={"id": video_id, "snippet": body}
     ).execute()
+    before = {key: snippet.get(key) for key in ("title", "description", "tags")}
+    after = {key: body.get(key) for key in before}
+    if before != after:
+        performance.record_change(ch(), video_id, before, after, baseline)
     analytics.channel_videos(ch(), refresh=True)
     return {"id": video_id, **body}
 
@@ -497,6 +596,8 @@ def _set_video_thumbnail(
 ) -> bytes:
     from googleapiclient.http import MediaFileUpload
 
+    baseline = performance.baseline(ch(), video_id)
+
     uploaded = next((i for i in _queue() if i.get("youtube_id") == video_id), {})
     speaker = speaker or uploaded.get("speaker") or ch().config().channel.speaker
     thumbnail = thumbnails.draw(
@@ -509,6 +610,13 @@ def _set_video_thumbnail(
         videoId=video_id,
         media_body=MediaFileUpload(str(thumbnail), mimetype="image/jpeg"),
     ).execute()
+    performance.record_change(
+        ch(),
+        video_id,
+        {"thumbnail": "previous YouTube artwork"},
+        {"thumbnail_prompt": thumbnail_prompt},
+        baseline,
+    )
     return thumbnail.read_bytes()
 
 
@@ -654,8 +762,10 @@ def main() -> None:
             "process_source": _process_job,
             "publish": _publish_job,
             "thumbnails": _thumbnails_job,
+            "repair": lambda name, args: recovery.repair(Channel(name), **args),
         },
     )
+    performance.start_sampler()
 
     app = mcp.streamable_http_app(
         streamable_http_path="/mcp",

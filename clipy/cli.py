@@ -2,6 +2,7 @@
 clipy process CHANNEL URL      turn a source into queued clips by hand"""
 
 import argparse
+import json
 import logging
 import sys
 
@@ -10,6 +11,7 @@ from dotenv import load_dotenv
 from .channel import PROJECT_ROOT, Channel, all_channels
 from .logging_config import setup_logging
 from .pipeline import process_source
+from .studio import record
 from .upload import authorize
 
 logger = logging.getLogger(__name__)
@@ -24,13 +26,30 @@ def main() -> None:
     process.add_argument("channel")
     process.add_argument("url")
     process.add_argument("--speaker", help="the source's main speaker")
+    studio = commands.add_parser(
+        "studio-import", help="import observed Studio readings as JSON from stdin"
+    )
+    studio.add_argument("channel")
+    collect = commands.add_parser(
+        "studio-collect", help="collect fresh Studio cards from the server browser"
+    )
+    collect.add_argument("channel", nargs="?")
     args = parser.parse_args()
 
     load_dotenv(PROJECT_ROOT / ".env")
     setup_logging()
+    if args.command == "studio-collect":
+        from .studio_collect import run
+
+        if args.channel and args.channel not in {c.name for c in all_channels()}:
+            parser.error("Unknown channel")
+        sys.exit(run(args.channel))
     if args.channel not in {c.name for c in all_channels()}:
         parser.error(f"config.toml has no [channels.{args.channel}]")
     channel = Channel(args.channel)
+    if args.command == "studio-import":
+        print(json.dumps(record(channel, json.load(sys.stdin))))
+        return
     config = channel.config()
 
     if args.command == "auth":

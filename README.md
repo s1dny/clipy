@@ -81,6 +81,37 @@ channel's agent did and why, anything that went wrong, patterns it sees
 across the channels, and anything the owner needs to do. If the observer
 fails, each channel's own summary is sent instead.
 
+Engagement and revenue are queried separately, with their own freshness
+dates. Hourly YouTube Data API snapshots provide current views, likes,
+comments and rounded subscriber counts, plus measured 24/48-hour changes
+once baselines exist. `recent_performance` exposes these provisional signals
+separately from delayed watch hours, revenue, impressions and CTR.
+
+A dedicated persistent Chromium session on azalab-0 can collect the visible
+Studio metric cards hourly with `clipy studio-collect`. Its readings keep the
+capture time, Since published period, approximate UI counts, missing values
+and collector failures. The agent reads them through `recent_performance`.
+Google sign-in is interactive once; the browser and collector run on the
+server and need no Mac or Codex usage. The deployment belongs in the homelab
+repo; the desktop is reached only via SSH and Kubernetes port forwarding,
+and its Chrome debugging port is only accessible within its pod.
+
+To import a manually observed Studio reading, pass a JSON list to
+`clipy studio-import CHANNEL`. Each reading needs `video_id`, a timezone-aware
+`observed_at`, the matching Studio analytics `url`, `period: "since_published"`,
+`approximate`, and `metrics` (views, impressions, ctr_percent, watch_hours,
+subscribers or revenue_usd; unavailable values are null). Only this channel's
+videos and readings captured in the last two hours are accepted.
+
+Upload success is distinct from processing success. Clipy retains each MP4
+until YouTube confirms successful processing, and synchronises queue dates
+with YouTube's current calendar. Agents can inspect and repair failed or
+stalled private uploads on any day. Recovery fully re-encodes the excerpt,
+uploads a private replacement, confirms processing, transfers the future
+schedule and then deletes the broken copy. It refuses public/watched videos,
+working uploads and policy rejections; retries resume the same replacement.
+New release batches still happen on Mondays.
+
 ## The one manual step
 
 The YouTube API cannot turn on monetization for a video. For the Jonathan
@@ -191,6 +222,7 @@ clipy process <channel> <youtube-url> [--speaker "Full Name"]
 ```bash
 uv run ruff format .
 uv run ruff check .
+uv run playwright install chromium
 uv run pytest tests
 ```
 

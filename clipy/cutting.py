@@ -96,6 +96,8 @@ def cut_clip(
     end_ms: int,
     output: Path,
     ffmpeg_path: str,
+    *,
+    smart: bool = True,
 ) -> bool:
     """Cut [start_ms, end_ms) into an MP4 at output; False on failure."""
     start, end = start_ms / 1000, end_ms / 1000
@@ -109,7 +111,7 @@ def cut_clip(
     try:
         with tempfile.TemporaryDirectory(dir=output.parent) as tmp:
             playlist = None
-            if _video_codec(ffprobe, video) == "h264":
+            if smart and _video_codec(ffprobe, video) == "h264":
                 playlist = _smart_video(
                     ffmpeg_path, ffprobe, video, start, end, Path(tmp)
                 )
