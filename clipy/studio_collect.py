@@ -1,10 +1,12 @@
 """Read visible Studio metric cards from the dedicated server browser."""
 
 import fcntl
+import json
 import logging
 import os
 import re
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
@@ -26,6 +28,46 @@ CARDS = {
         "VIDEO_THUMBNAIL_IMPRESSIONS_VTR": "ctr_percent",
     },
 }
+
+
+def _session_path() -> Path | None:
+    value = os.environ.get("CLIPY_STUDIO_SESSION")
+    return Path(value) if value else None
+
+
+def _checkpoint_session(context) -> None:
+    path = _session_path()
+    if path is None:
+        return
+    cookies = [
+        cookie
+        for cookie in context.cookies()
+        if any(
+            cookie["domain"].lstrip(".") == domain
+            or cookie["domain"].endswith("." + domain)
+            for domain in ("google.com", "google.com.au", "google.nl", "youtube.com")
+        )
+    ]
+    # Only checkpoint a verified Google web login. A signed-out collector must
+    # never overwrite the last working session with an account chooser's jar.
+    if not any(c["name"] == "SID" for c in cookies):
+        return
+    # write_json_file uses an owner-only temporary file and atomic replacement.
+    write_json_file(path, cookies)
+
+
+def _restore_session(context) -> None:
+    path = _session_path()
+    if path is None or not path.exists():
+        return
+    if any(
+        c["name"] == "SID" and c["domain"] == ".google.com" for c in context.cookies()
+    ):
+        return
+    cookies = json.loads(path.read_text())
+    now = datetime.now(UTC).timestamp()
+    cookies = [c for c in cookies if c["expires"] == -1 or c["expires"] > now]
+    context.add_cookies(cookies)
 
 
 def _number(text: str) -> float | None:
@@ -66,6 +108,7 @@ def collect(channel: Channel, page) -> dict:
         raise ValueError(
             f"Studio browser is not signed into {channel.config().channel.handle}; switch/sign into this channel once."
         )
+    _checkpoint_session(page.context)
     videos = channel_videos(channel, refresh=True)
     public = [v for v in videos if v["privacy"] == "public"]
     targets = [v["id"] for v in public[:5]]
@@ -123,6 +166,7 @@ def collect(channel: Channel, page) -> dict:
                 ],
             )
             saved += 1
+            _checkpoint_session(context)
         except Exception as exc:  # noqa: BLE001 - one unavailable reading must not discard the others
             logger.warning(
                 "Studio reading failed for %s/%s: %s",
@@ -164,6 +208,7 @@ def _run(channel_name: str | None = None) -> int:
             os.environ.get("CLIPY_STUDIO_CDP", "http://127.0.0.1:9222"), timeout=30_000
         )
         context = browser.contexts[0]
+        _restore_session(context)
         # This dedicated browser is also used for the owner's one-time login.
         # Keep those completed Studio tabs idle before allocating a collector
         # renderer; never navigate an in-progress Google sign-in page.

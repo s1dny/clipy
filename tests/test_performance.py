@@ -264,11 +264,17 @@ def test_server_collector_reads_visible_cards_into_agent_report(metric_server):
 from playwright.sync_api import sync_playwright
 from clipy.channel import Channel
 from clipy.studio_collect import collect
+from clipy.studio_collect import _restore_session
+os.environ['CLIPY_STUDIO_SESSION'] = str(Path(os.environ['CLIPY_CONFIG']).parent / 'private-session.json')
 with sync_playwright() as playwright:
     browser = playwright.chromium.launch()
     context = browser.new_context()
+    context.add_cookies([{'name': 'SID', 'value': 'fixture-session', 'domain': '.google.com', 'path': '/', 'secure': True, 'httpOnly': True}, {'name': 'SID', 'value': 'fixture-session', 'domain': '.youtube.com', 'path': '/', 'secure': True, 'httpOnly': True}])
     page = context.new_page()
     def studio_page(route):
+        if 'SID=fixture-session' not in route.request.headers.get('cookie', ''):
+            route.fulfill(content_type='text/html', body='Sign in required')
+            return
         if '/channel/' in route.request.url:
             body = '<a aria-label="YouTube Studio dashboard" href="/channel/channel-owned">Studio</a>'
         else:
@@ -277,8 +283,17 @@ with sync_playwright() as playwright:
             body = '<button>Oct 9 — Now Since published</button>' + ''.join(f'<div id="{key}-tab"><div id="metric-total">{value}</div></div>' for key,value in values.items())
         route.fulfill(content_type='text/html; charset=utf-8', body=body)
     page.context.route('https://studio.youtube.com/**', studio_page)
-    print(json.dumps(collect(Channel('blow'), page)))
+    assert collect(Channel('blow'), page)['saved'] == 1
     assert context.pages == [], 'Collector left Studio renderers running'
+    browser.close()
+    session = Path(os.environ['CLIPY_STUDIO_SESSION'])
+    assert session.stat().st_mode & 0o777 == 0o600
+    browser = playwright.chromium.launch()
+    context = browser.new_context()
+    _restore_session(context)
+    page = context.new_page()
+    context.route('https://studio.youtube.com/**', studio_page)
+    print(json.dumps(collect(Channel('blow'), page)))
     browser.close()
 """
     )
