@@ -163,7 +163,14 @@ def _run(channel_name: str | None = None) -> int:
         browser = playwright.chromium.connect_over_cdp(
             os.environ.get("CLIPY_STUDIO_CDP", "http://127.0.0.1:9222"), timeout=30_000
         )
-        page = browser.contexts[0].new_page()
+        context = browser.contexts[0]
+        # This dedicated browser is also used for the owner's one-time login.
+        # Keep those completed Studio tabs idle before allocating a collector
+        # renderer; never navigate an in-progress Google sign-in page.
+        for existing in context.pages:
+            if existing.url.startswith("https://studio.youtube.com/"):
+                existing.goto("about:blank")
+        page = context.new_page()
         try:
             for channel in channels:
                 try:
