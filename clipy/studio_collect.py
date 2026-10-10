@@ -1,5 +1,6 @@
 """Read visible Studio metric cards from the dedicated server browser."""
 
+import fcntl
 import logging
 import os
 import re
@@ -8,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from playwright.sync_api import sync_playwright
 
 from .analytics import channel_videos
-from .channel import Channel, all_channels
+from .channel import Channel, all_channels, data_root
 from .common import read_json_file, write_json_file
 from .studio import record
 
@@ -130,6 +131,20 @@ def collect(channel: Channel, page) -> dict:
 
 
 def run(channel_name: str | None = None) -> int:
+    # Scheduled and manual collection share the same browser and memory budget.
+    # Keep the descriptor open for the whole run; the kernel releases it on exit.
+    path = data_root() / "studio-collector.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            logger.info("Studio collection already running; skipping overlap.")
+            return 0
+        return _run(channel_name)
+
+
+def _run(channel_name: str | None = None) -> int:
     channels = [Channel(channel_name)] if channel_name else all_channels()
     failed = False
     with sync_playwright() as playwright:
