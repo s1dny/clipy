@@ -80,10 +80,10 @@ def collect(channel: Channel, page) -> dict:
         known = {v["id"] for v in public}
         targets = list(dict.fromkeys([*reversed(active), *targets]))
         targets = [v for v in targets if v in known][:10]
-    # Studio retains substantial renderer memory across SPA navigations. Keep
-    # the ownership-check tab idle and release each video's renderer afterward.
+    # Navigating to blank can retain the dashboard in back/forward cache.
+    # Release the ownership-check renderer before reading metric cards.
     context = page.context
-    page.goto("about:blank")
+    page.close()
     saved, errors = 0, []
     for video_id in targets:
         video_page = None
@@ -167,12 +167,15 @@ def _run(channel_name: str | None = None) -> int:
         # This dedicated browser is also used for the owner's one-time login.
         # Keep those completed Studio tabs idle before allocating a collector
         # renderer; never navigate an in-progress Google sign-in page.
+        if not any(existing.url == "about:blank" for existing in context.pages):
+            context.new_page()
         for existing in context.pages:
             if existing.url.startswith("https://studio.youtube.com/"):
-                existing.goto("about:blank")
-        page = context.new_page()
+                existing.close()
+        page = None
         try:
             for channel in channels:
+                page = context.new_page()
                 try:
                     status = collect(channel, page)
                 except Exception as exc:  # noqa: BLE001 - one unavailable reading must not discard the others
@@ -193,8 +196,11 @@ def _run(channel_name: str | None = None) -> int:
                     )
                 write_json_file(channel.dir / "studio-status.json", status)
                 failed |= bool(status["errors"])
+                if not page.is_closed():
+                    page.close()
         finally:
-            page.close()
+            if page is not None and not page.is_closed():
+                page.close()
             # Disconnect, leaving the persistent signed-in Chromium running.
             browser.close()
     return int(failed)

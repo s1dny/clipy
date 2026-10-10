@@ -278,7 +278,7 @@ with sync_playwright() as playwright:
         route.fulfill(content_type='text/html; charset=utf-8', body=body)
     page.context.route('https://studio.youtube.com/**', studio_page)
     print(json.dumps(collect(Channel('blow'), page)))
-    assert page.context.pages == [page], 'Collector left video tabs running'
+    assert context.pages == [], 'Collector left Studio renderers running'
     browser.close()
 """
     )
