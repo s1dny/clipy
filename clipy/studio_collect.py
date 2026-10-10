@@ -88,9 +88,11 @@ def collect(channel: Channel, page) -> dict:
     for video_id in targets:
         video_page = None
         try:
-            video_page = context.new_page()
             metrics = {}
             for tab, cards in CARDS.items():
+                if video_page is not None:
+                    video_page.close()
+                video_page = context.new_page()
                 url = f"https://studio.youtube.com/video/{video_id}/analytics/tab-{tab}/period-default"
                 video_page.goto(url, wait_until="domcontentloaded")
                 first_card = next(iter(cards))
