@@ -80,25 +80,31 @@ def collect(channel: Channel, page) -> dict:
         known = {v["id"] for v in public}
         targets = list(dict.fromkeys([*reversed(active), *targets]))
         targets = [v for v in targets if v in known][:10]
+    # Studio retains substantial renderer memory across SPA navigations. Keep
+    # the ownership-check tab idle and release each video's renderer afterward.
+    context = page.context
+    page.goto("about:blank")
     saved, errors = 0, []
     for video_id in targets:
+        video_page = None
         try:
+            video_page = context.new_page()
             metrics = {}
             for tab, cards in CARDS.items():
                 url = f"https://studio.youtube.com/video/{video_id}/analytics/tab-{tab}/period-default"
-                page.goto(url, wait_until="domcontentloaded")
+                video_page.goto(url, wait_until="domcontentloaded")
                 first_card = next(iter(cards))
-                page.locator(f"#{first_card}-tab #metric-total").wait_for(
+                video_page.locator(f"#{first_card}-tab #metric-total").wait_for(
                     timeout=60_000
                 )
-                if not page.get_by_role(
+                if not video_page.get_by_role(
                     "button", name=re.compile("Since published")
                 ).first.is_visible():
                     raise ValueError(
                         "Studio is not displaying Since published; retain prior readings."
                     )
                 for card, metric in cards.items():
-                    node = page.locator(f"#{card}-tab #metric-total")
+                    node = video_page.locator(f"#{card}-tab #metric-total")
                     if node.count():
                         metrics[metric] = _number(node.inner_text())
             record(
@@ -123,6 +129,9 @@ def collect(channel: Channel, page) -> dict:
                 type(exc).__name__,
             )
             errors.append({"video_id": video_id, "error": type(exc).__name__})
+        finally:
+            if video_page is not None and not video_page.is_closed():
+                video_page.close()
     return {
         "checked_at": datetime.now(UTC).isoformat(),
         "saved": saved,

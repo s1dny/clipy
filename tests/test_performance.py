@@ -266,7 +266,8 @@ from clipy.channel import Channel
 from clipy.studio_collect import collect
 with sync_playwright() as playwright:
     browser = playwright.chromium.launch()
-    page = browser.new_page()
+    context = browser.new_context()
+    page = context.new_page()
     def studio_page(route):
         if '/channel/' in route.request.url:
             body = '<a aria-label="YouTube Studio dashboard" href="/channel/channel-owned">Studio</a>'
@@ -275,8 +276,9 @@ with sync_playwright() as playwright:
             values = {'EXTERNAL_VIEWS': '9.4K', 'EXTERNAL_WATCH_TIME': '354.4', 'SUBSCRIBERS_NET_CHANGE': '+6', 'TOTAL_ESTIMATED_EARNINGS': '—'} if overview else {'VIDEO_THUMBNAIL_IMPRESSIONS': '34.5K', 'VIDEO_THUMBNAIL_IMPRESSIONS_VTR': '6.0%'}
             body = '<button>Oct 9 — Now Since published</button>' + ''.join(f'<div id="{key}-tab"><div id="metric-total">{value}</div></div>' for key,value in values.items())
         route.fulfill(content_type='text/html; charset=utf-8', body=body)
-    page.route('https://studio.youtube.com/**', studio_page)
+    page.context.route('https://studio.youtube.com/**', studio_page)
     print(json.dumps(collect(Channel('blow'), page)))
+    assert page.context.pages == [page], 'Collector left video tabs running'
     browser.close()
 """
     )
