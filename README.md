@@ -91,10 +91,18 @@ A dedicated persistent Chromium session on azalab-0 can collect the visible
 Studio metric cards hourly with `clipy studio-collect`. Its readings keep the
 capture time, Since published period, approximate UI counts, missing values
 and collector failures. The agent reads them through `recent_performance`.
-Google sign-in is interactive once; the browser and collector run on the
-server and need no Mac or Codex usage. The deployment belongs in the homelab
-repo; the desktop is reached only via SSH and Kubernetes port forwarding,
+Google sign-in is interactive when Google requires authentication; the browser
+and collector run on the server and need no Mac or Codex usage. The deployment
+belongs in the homelab repo; the desktop is reached only via SSH and Kubernetes port forwarding,
 and its Chrome debugging port is only accessible within its pod.
+
+The approved server deployment sets `CLIPY_STUDIO_SESSION` to an owner-only
+cookie checkpoint on the private browser volume. Only a verified Studio
+ownership check can update it; collection restores unexpired Google/YouTube
+cookies when Chromium loses the Google.com sign-in cookie. The checkpoint
+contains account-access credentials, not passwords: keep it private and out
+of logs, Git, and ordinary application data. Google can still require a fresh
+interactive sign-in if it invalidates the session.
 
 To import a manually observed Studio reading, pass a JSON list to
 `clipy studio-import CHANNEL`. Each reading needs `video_id`, a timezone-aware
