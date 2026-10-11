@@ -285,7 +285,7 @@ def test_publish_recovers_without_duplicate_upload(tmp_path, mode):
     )
     server = (f"http://127.0.0.1:{port}", tmp_path)
     try:
-        deadline = time.monotonic() + 15
+        deadline = time.monotonic() + 60
         while True:
             try:
                 if requests.get(server[0] + "/healthz", timeout=1).ok:

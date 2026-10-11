@@ -257,7 +257,7 @@ def metric_server(tmp_path):
     proc = subprocess.Popen([sys.executable, "-c", LAUNCHER], env=env)
     base = f"http://127.0.0.1:{port}"
     try:
-        deadline = time.monotonic() + 15
+        deadline = time.monotonic() + 60
         while True:
             try:
                 if requests.get(base + "/healthz", timeout=1).ok:

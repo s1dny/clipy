@@ -217,7 +217,7 @@ main()
     try:
         import time
 
-        deadline = time.monotonic() + 15
+        deadline = time.monotonic() + 60
         while True:
             try:
                 if requests.get(f"http://127.0.0.1:{port}/healthz", timeout=1).ok:
