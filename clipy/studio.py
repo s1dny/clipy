@@ -1,4 +1,4 @@
-"""Provenanced readings of the visible Studio UI, kept apart from API metrics."""
+"""Provenanced Studio readings, kept apart from delayed public API reports."""
 
 import math
 from datetime import UTC, datetime, timedelta
@@ -17,7 +17,9 @@ METRICS = {
 }
 
 
-def record(channel: Channel, readings: list[dict]) -> dict:
+def record(
+    channel: Channel, readings: list[dict], *, source="visible YouTube Studio UI"
+) -> dict:
     known = {v["id"] for v in channel_videos(channel, refresh=True)}
     now = datetime.now(UTC)
     clean = []
@@ -42,6 +44,10 @@ def record(channel: Channel, readings: list[dict]) -> dict:
         ):
             raise ValueError("A matching Studio video-analytics URL is required.")
         metrics = reading["metrics"]
+        if metrics.get("revenue_usd") is not None and reading.get("currency") != "USD":
+            raise ValueError(
+                "Revenue readings must explicitly identify currency as USD."
+            )
         if not metrics or not set(metrics) <= METRICS:
             raise ValueError(f"Metrics must be a nonempty subset of {sorted(METRICS)}.")
         for key, value in metrics.items():
@@ -58,7 +64,7 @@ def record(channel: Channel, readings: list[dict]) -> dict:
         clean.append(
             {
                 **reading,
-                "source": "visible YouTube Studio UI",
+                "source": source,
                 "observed_at": observed.astimezone(UTC).isoformat(),
                 "approximate": bool(reading.get("approximate", True)),
             }
@@ -81,11 +87,17 @@ def latest(channel: Channel) -> dict:
     history = read_json_file(path) if path.exists() else []
     videos = {}
     for reading in sorted(history, key=lambda r: r["observed_at"]):
+        metrics = dict(reading["metrics"])
+        if reading.get("currency") != "USD":
+            # Earlier browser captures used the account's currency preference.
+            # Keep the original history but do not present it as verified USD.
+            metrics["revenue_usd"] = None
         age = (
             datetime.now(UTC) - datetime.fromisoformat(reading["observed_at"])
         ).total_seconds() / 3600
         videos[reading["video_id"]] = {
             **reading,
+            "metrics": metrics,
             "age_hours": round(age, 2),
             "stale": age > 26,
         }
@@ -94,7 +106,7 @@ def latest(channel: Channel) -> dict:
         "collector": read_json_file(status_path)
         if status_path.exists()
         else {"status": "not collected yet"},
-        "source": "visible YouTube Studio UI",
-        "note": "Since-published readings, separate from API windows. Rounded UI counts are approximate; stale readings are not fresh experiment evidence. Missing metrics stay unknown.",
+        "source": "YouTube Studio analytics",
+        "note": "Since-published readings, separate from public API windows. Each reading identifies its source and whether it is approximate. Stale readings are not fresh experiment evidence. Missing metrics stay unknown.",
         "videos": list(videos.values()),
     }

@@ -31,7 +31,7 @@ def main() -> None:
     )
     studio.add_argument("channel")
     collect = commands.add_parser(
-        "studio-collect", help="collect fresh Studio cards from the server browser"
+        "studio-collect", help="collect fresh Studio analytics through direct API calls"
     )
     collect.add_argument("channel", nargs="?")
     args = parser.parse_args()

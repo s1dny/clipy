@@ -87,28 +87,37 @@ comments and rounded subscriber counts, plus measured 24/48-hour changes
 once baselines exist. `recent_performance` exposes these provisional signals
 separately from delayed watch hours, revenue, impressions and CTR.
 
-A dedicated persistent Chromium session on azalab-0 can collect the visible
-Studio metric cards hourly with `clipy studio-collect`. Its readings keep the
-capture time, Since published period, approximate UI counts, missing values
-and collector failures. The agent reads them through `recent_performance`.
-Google sign-in is interactive when Google requires authentication; the browser
-and collector run on the server and need no Mac or Codex usage. The deployment
-belongs in the homelab repo; the desktop is reached only via SSH and Kubernetes port forwarding,
-and its Chrome debugging port is only accessible within its pod.
+Clipy collects fresh Studio analytics hourly with `clipy studio-collect`
+using direct authenticated `yta_web/get_cards` requests. It loads cookies from
+the private session checkpoint, bootstraps the current Studio client version
+and channel delegation through HTTP, and regenerates authentication hashes
+for each request. It explicitly requests Since published and USD, retaining
+unrounded totals, provider estimates, missing values and failures. The agent
+reads these results through `recent_performance`; older UI revenue without a
+verified currency is left unknown.
 
-The approved server deployment sets `CLIPY_STUDIO_SESSION` to an owner-only
-cookie checkpoint on the private browser volume. Only a verified Studio
-ownership check can update it; collection restores unexpired Google/YouTube
-cookies when Chromium loses the Google.com sign-in cookie. The checkpoint
-contains account-access credentials, not passwords: keep it private and out
-of logs, Git, and ordinary application data. Google can still require a fresh
-interactive sign-in if it invalidates the session.
+Chromium is for interactive Google sign-in and cookie recovery only. Collection
+never opens analytics pages or reads DOM cards. On authentication failure it
+refreshes the HTTP client context, then reads the browser's live cookie jar
+once if necessary. Only a successfully authenticated, channel-checked response
+can update the owner-only cookie checkpoint. Response cookie updates persist
+between runs, so normal collection also works while the browser is unavailable.
+Google can still require interactive sign-in if it revokes the session.
+
+The browser and collector run on azalab-0 without a Mac or Codex calls. Their
+deployment belongs in the homelab repo; the desktop is reached only through
+SSH/Kubernetes forwarding and its debugging port remains pod-local.
+`CLIPY_STUDIO_SESSION` points to the approved private-volume checkpoint. It
+contains account-access credentials, not passwords: keep it out of logs,
+Git and ordinary application data. Public browser user-agent metadata is saved
+alongside it; client context and delegation variables are refreshed in memory.
 
 To import a manually observed Studio reading, pass a JSON list to
 `clipy studio-import CHANNEL`. Each reading needs `video_id`, a timezone-aware
 `observed_at`, the matching Studio analytics `url`, `period: "since_published"`,
 `approximate`, and `metrics` (views, impressions, ctr_percent, watch_hours,
-subscribers or revenue_usd; unavailable values are null). Only this channel's
+subscribers or revenue_usd; unavailable values are null). Revenue also requires
+`currency: "USD"`. Only this channel's
 videos and readings captured in the last two hours are accepted.
 
 Upload success is distinct from processing success. Clipy retains each MP4

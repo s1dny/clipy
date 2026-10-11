@@ -1,5 +1,6 @@
 """Drive Analytics, counter snapshots and Studio import through real HTTP clients."""
 
+import hashlib
 import json
 import os
 import subprocess
@@ -17,10 +18,33 @@ from test_upload_recovery import LAUNCHER, YouTube
 
 
 class Metrics(YouTube):
+    studio_bootstraps = 0
+    studio_calls = 0
+    studio_wrong_channel = False
+
     def do_GET(self):
         query = parse_qs(urlsplit(self.path).query)
         path = urlsplit(self.path).path
-        if path == "/thumbnail-max.jpg":
+        if path == "/json/version":
+            self.reply({"User-Agent": "Fixture browser"})
+        elif path.startswith("/channel/"):
+            type(self).studio_bootstraps += 1
+            version = str(type(self).studio_bootstraps)
+            config = {
+                "INNERTUBE_API_KEY": "fixture-key",
+                "INNERTUBE_CONTEXT_CLIENT_NAME": 62,
+                "INNERTUBE_CONTEXT_CLIENT_VERSION": version,
+                "INNERTUBE_CONTEXT": {"client": {"clientVersion": version}},
+                "DELEGATION_CONTEXT": {"externalChannelId": "channel-owned"},
+                "INNERTUBE_CONTEXT_SERIALIZED_DELEGATION_CONTEXT": "fixture-delegation",
+                "SESSION_INDEX": 0,
+            }
+            body = ("<script>ytcfg.set(" + json.dumps(config) + ");</script>").encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif path == "/thumbnail-max.jpg":
             self.reply({}, 404)
         elif path == "/thumbnail-high.jpg":
             self.send_response(200)
@@ -80,10 +104,84 @@ class Metrics(YouTube):
         else:
             super().do_GET()
 
+    def do_POST(self):
+        if urlsplit(self.path).path != "/youtubei/v1/yta_web/get_cards":
+            return super().do_POST()
+        query = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        assert query["screenConfig"]["entity"] == {"videoId": "owned-video"}
+        assert (
+            query["screenConfig"]["timePeriod"]["timePeriodType"]
+            == "ANALYTICS_TIME_PERIOD_TYPE_SINCE_PUBLISH"
+        )
+        assert query["screenConfig"]["currency"] == "USD"
+        assert (
+            query["context"]["user"]["delegationContext"]["externalChannelId"]
+            == "channel-owned"
+        )
+        assert self.headers["X-Youtube-Client-Version"] == str(
+            type(self).studio_bootstraps
+        )
+        assert self.headers["X-Youtube-Delegation-Context"] == "fixture-delegation"
+        assert "SAPISID=fixture-session" in self.headers["Cookie"]
+        stamp, digest = self.headers["Authorization"].split()[1].split("_")
+        assert abs(int(time.time()) - int(stamp)) < 10
+        assert (
+            digest
+            == hashlib.sha1(
+                f"{stamp} fixture-session https://studio.youtube.com".encode()
+            ).hexdigest()
+        )
+        type(self).studio_calls += 1
+        if type(self).studio_calls == 1:
+            self.reply({"error": {"code": 401}}, 401)
+            return
+        values = {
+            "EXTERNAL_VIEWS": 9401,
+            "EXTERNAL_WATCH_TIME": 1275840000,
+            "SUBSCRIBERS_NET_CHANGE": -2,
+            "TOTAL_ESTIMATED_EARNINGS": 2468,
+            "VIDEO_THUMBNAIL_IMPRESSIONS": 34567,
+            "VIDEO_THUMBNAIL_IMPRESSIONS_VTR": 6.04,
+        }
+        channel = (
+            "wrong-channel" if type(self).studio_wrong_channel else "channel-owned"
+        )
+        self.reply(
+            {
+                "cards": [
+                    {
+                        "config": {"topEntitySelection": {"channelId": channel}},
+                        "keyMetricCardData": {
+                            "keyMetricTabs": [
+                                {
+                                    "primaryContent": {
+                                        "metric": metric,
+                                        "total": value,
+                                        "anomalies": [
+                                            {
+                                                "type": "ANALYTICS_ANOMALY_TYPE_DATA_ESTIMATED"
+                                            }
+                                        ],
+                                    }
+                                }
+                                for metric, value in values.items()
+                            ]
+                        },
+                    }
+                ]
+            },
+            **{
+                "Set-Cookie": "SIDCC=rotated; Domain=.youtube.com; Path=/; Secure; HttpOnly"
+            },
+        )
+
 
 @pytest.fixture
 def metric_server(tmp_path):
     now = datetime.now(UTC)
+    Metrics.studio_bootstraps = 0
+    Metrics.studio_calls = 0
+    Metrics.studio_wrong_channel = False
     channel = tmp_path / "channels/blow"
     channel.mkdir(parents=True)
     (tmp_path / "config.toml").write_text(CONFIG.split("[channels.science]")[0])
@@ -256,68 +354,109 @@ def test_private_video_preview_uses_api_renditions_when_maxres_is_missing(
     assert preview.size == (1920, 1080)
 
 
-def test_server_collector_reads_visible_cards_into_agent_report(metric_server):
+@pytest.mark.parametrize("wrong_channel", [False, True])
+def test_direct_studio_collection_refreshes_auth_without_rendering(
+    metric_server, wrong_channel
+):
     server, env = metric_server
+    Metrics.studio_wrong_channel = wrong_channel
+    session = server[1] / "private-session.json"
+    session.write_text(
+        json.dumps(
+            [
+                {
+                    "name": "SID",
+                    "value": "fixture-session",
+                    "domain": ".google.com",
+                    "path": "/",
+                    "secure": True,
+                    "httpOnly": True,
+                    "expires": -1,
+                },
+                {
+                    "name": "SAPISID",
+                    "value": "fixture-session",
+                    "domain": ".youtube.com",
+                    "path": "/",
+                    "secure": True,
+                    "httpOnly": True,
+                    "expires": -1,
+                },
+            ]
+        )
+    )
+    session.chmod(0o600)
     collector = (
         LAUNCHER.split("from clipy.mcp_server import main")[0]
         + """
-from playwright.sync_api import sync_playwright
-from clipy.channel import Channel
-from clipy.studio_collect import collect
-from clipy.studio_collect import _restore_session
-os.environ['CLIPY_STUDIO_SESSION'] = str(Path(os.environ['CLIPY_CONFIG']).parent / 'private-session.json')
-with sync_playwright() as playwright:
-    browser = playwright.chromium.launch()
-    context = browser.new_context()
-    context.add_cookies([{'name': 'SID', 'value': 'fixture-session', 'domain': '.google.com', 'path': '/', 'secure': True, 'httpOnly': True}, {'name': 'SID', 'value': 'fixture-session', 'domain': '.youtube.com', 'path': '/', 'secure': True, 'httpOnly': True}])
-    page = context.new_page()
-    def studio_page(route):
-        if 'SID=fixture-session' not in route.request.headers.get('cookie', ''):
-            route.fulfill(content_type='text/html', body='Sign in required')
-            return
-        if '/channel/' in route.request.url:
-            body = '<a aria-label="YouTube Studio dashboard" href="/channel/channel-owned">Studio</a>'
-        else:
-            overview = 'tab-overview' in route.request.url
-            values = {'EXTERNAL_VIEWS': '9.4K', 'EXTERNAL_WATCH_TIME': '354.4', 'SUBSCRIBERS_NET_CHANGE': '+6', 'TOTAL_ESTIMATED_EARNINGS': '—'} if overview else {'VIDEO_THUMBNAIL_IMPRESSIONS': '34.5K', 'VIDEO_THUMBNAIL_IMPRESSIONS_VTR': '6.0%'}
-            body = '<button>Oct 9 — Now Since published</button>' + ''.join(f'<div id="{key}-tab"><div id="metric-total">{value}</div></div>' for key,value in values.items())
-        route.fulfill(content_type='text/html; charset=utf-8', body=body)
-    page.context.route('https://studio.youtube.com/**', studio_page)
-    assert collect(Channel('blow'), page)['saved'] == 1
-    assert context.pages == [], 'Collector left Studio renderers running'
-    browser.close()
-    session = Path(os.environ['CLIPY_STUDIO_SESSION'])
-    assert session.stat().st_mode & 0o777 == 0o600
-    browser = playwright.chromium.launch()
-    context = browser.new_context()
-    _restore_session(context)
-    page = context.new_page()
-    context.route('https://studio.youtube.com/**', studio_page)
-    print(json.dumps(collect(Channel('blow'), page)))
-    browser.close()
+import copy, requests
+from requests.adapters import HTTPAdapter
+from urllib.parse import urlsplit
+import clipy.studio_collect as studio
+# Real HTTP, cookies, authentication hashes, JSON parsing and persistence.
+# Only the destination socket changes to the fixture's local server.
+class FixtureTransport(HTTPAdapter):
+    def send(self, request, **kwargs):
+        redirected = copy.copy(request)
+        parsed = urlsplit(request.url)
+        redirected.url = os.environ['FAKE_GOOGLE_URL'] + parsed.path + ('?' + parsed.query if parsed.query else '')
+        response = super().send(redirected, **kwargs)
+        response.url = request.url
+        response.request = request
+        return response
+original_session_init = requests.Session.__init__
+def session_init(self):
+    original_session_init(self)
+    self.mount('https://studio.youtube.com/', FixtureTransport())
+requests.Session.__init__ = session_init
+def no_browser():
+    raise AssertionError('Direct collection attempted to render browser pages')
+studio.sync_playwright = no_browser
+from clipy.cli import main
+import sys
+sys.argv = ['clipy', 'studio-collect', 'blow']
+main()
 """
     )
-    result = subprocess.run(
-        [sys.executable, "-c", collector],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=90,
-    )
-    assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout)["saved"] == 1, result.stdout
-    report = data(call(server, "recent_performance"))
-    reading = report["studio"]["videos"][0]
-    assert reading["metrics"] == {
-        "views": 9400,
-        "watch_hours": 354.4,
-        "subscribers": 6,
-        "revenue_usd": None,
-        "impressions": 34500,
-        "ctr_percent": 6,
+    env = {
+        **env,
+        "CLIPY_STUDIO_SESSION": str(session),
+        "CLIPY_STUDIO_CDP": env["FAKE_GOOGLE_URL"],
     }
-    assert reading["approximate"] and reading["period"] == "since_published"
+    for _ in range(2):
+        result = subprocess.run(
+            [sys.executable, "-c", collector],
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+        if wrong_channel:
+            assert result.returncode == 1, result.stderr
+            assert not (server[1] / "channels/blow/studio.json").exists()
+        else:
+            assert result.returncode == 0, result.stderr
+            report = data(call(server, "recent_performance"))
+            reading = report["studio"]["videos"][0]
+            assert reading["source"] == "YouTube Studio internal analytics API"
+            assert reading["currency"] == "USD"
+            assert reading["metrics"] == {
+                "views": 9401,
+                "watch_hours": 354.4,
+                "subscribers": -2,
+                "revenue_usd": 2.468,
+                "impressions": 34567,
+                "ctr_percent": 6.04,
+            }
+            assert reading["approximate"] and reading["period"] == "since_published"
+            cookies = json.loads(session.read_text())
+            assert any(
+                c["name"] == "SIDCC" and c["value"] == "rotated" and c["httpOnly"]
+                for c in cookies
+            )
+            assert session.stat().st_mode & 0o777 == 0o600
+    assert Metrics.studio_bootstraps == 3
 
 
 def test_tuning_records_before_after_and_observed_baseline(metric_server):
