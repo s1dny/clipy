@@ -89,6 +89,9 @@ def comment_and_pin(video_id: str, handle: str, state: dict, save) -> None:
                 popup.get_by_text("Pin", exact=True).click()
                 dialog = page.locator("ytd-confirm-dialog-renderer")
                 dialog.get_by_role("button", name="Pin", exact=True).click()
+            # Pinning is asynchronous. Wait for YouTube to show the result
+            # before navigating, so a reload cannot cancel the pin request.
+            row.get_by_text(f"Pinned by {handle}", exact=True).wait_for()
             page.reload(wait_until="domcontentloaded")
             comments.scroll_into_view_if_needed()
             row.get_by_text(f"Pinned by {handle}", exact=True).wait_for()

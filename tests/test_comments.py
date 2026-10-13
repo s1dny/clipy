@@ -50,7 +50,7 @@ class Comments(YouTube):
             pinned = "Pinned by @JonathanBlowClips" if self.pins else ""
             action = "Unpin" if self.pins else "Pin"
             row = (
-                f'<ytd-comment-thread-renderer><a id="author-text">@JonathanBlowClips</a><p id="content-text">{FOLLOW_COMMENT}</p><p>{pinned}</p><button aria-label="Action menu" onclick="document.querySelector(\'ytd-popup-container\').innerHTML=\'<button onclick=showDialog()>{action}</button>\'">Actions</button></ytd-comment-thread-renderer>'
+                f'<ytd-comment-thread-renderer><a id="author-text">@JonathanBlowClips</a><p id="content-text">{FOLLOW_COMMENT}</p><p id="pin-label">{pinned}</p><button aria-label="Action menu" onclick="document.querySelector(\'ytd-popup-container\').innerHTML=\'<button onclick=showDialog()>{action}</button>\'">Actions</button></ytd-comment-thread-renderer>'
                 if self.posted
                 else ""
             )
@@ -59,7 +59,7 @@ class Comments(YouTube):
 <ytd-comments id="comments"><button onclick="document.querySelector('ytd-popup-container').innerHTML='<button>Newest first</button>'">Sort by</button>
 <button>Add a comment...</button><div id="contenteditable-root" contenteditable="true"></div><button onclick="post()">Comment</button>{row}</ytd-comments>
 <script>function showDialog() {{ document.querySelector('ytd-popup-container').innerHTML=''; document.body.insertAdjacentHTML('beforeend','<ytd-confirm-dialog-renderer><button onclick="pin()">Pin</button></ytd-confirm-dialog-renderer>'); }}
-async function pin() {{ await fetch('/pin',{{method:'POST'}}); location.reload(); }}
+async function pin() {{ const response=await fetch('/pin',{{method:'POST'}}); const data=await response.json(); if(data.pinned) document.querySelector('#pin-label').textContent='Pinned by @JonathanBlowClips'; }}
 async function post() {{ await fetch('/post',{{method:'POST',body:document.querySelector('#contenteditable-root').innerText}}); location.reload(); }}</script>""")
         else:
             super().do_GET()
@@ -80,9 +80,12 @@ async function post() {{ await fetch('/post',{{method:'POST',body:document.query
             type(self).posted += 1
             self.reply({})
         elif path == "/pin":
+            # A real pin request is asynchronous; verification must not reload
+            # until its result is visible, even with a slower provider.
+            time.sleep(0.2)
             if not self.fail_pin:
                 type(self).pins += 1
-            self.reply({})
+            self.reply({"pinned": bool(self.pins)})
         else:
             self.reply({}, 404)
 
@@ -106,6 +109,16 @@ def context(self, **kwargs):
 Browser.new_context = context
 original_timeout = Page.set_default_timeout
 Page.set_default_timeout = lambda self, value: original_timeout(self, 1500)
+import clipy.comments as comments
+original_comment_and_pin = comments.comment_and_pin
+def traced_comment_and_pin(*args, **kwargs):
+    try:
+        return original_comment_and_pin(*args, **kwargs)
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        raise
+comments.comment_and_pin = traced_comment_and_pin
 from clipy.cli import main
 main()
 """
