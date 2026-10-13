@@ -155,6 +155,18 @@ need nothing.
 
 ## Production
 
+Delivery uses one host job with a cached Linux test image. It runs the full
+E2E suite with four workers, sharing expensive media fixtures on one worker,
+then builds and publishes the production image. System packages, Python
+dependencies and Chromium are cached separately from source edits.
+The job's 300-second budget includes runner queue time, tests, image build,
+publishing and readiness of the app, site, collector, comment worker and
+agent template. It prints `COMMIT_TO_READY_SECONDS` only after live proof.
+`/releasez` exposes only the commit and aggregate readiness, using a
+namespace-scoped in-cluster identity. CI receives no Kubernetes credential.
+Clipy has its own ten-second Flux image automation, with registry webhooks
+and a thirty-second registry-scan fallback.
+
 CI builds the image `ghcr.io/s1dny/clipy` from every `main` commit whose
 checks pass, and Flux deploys it to azalab-0. The Kubernetes manifests are in
 the homelab repo under `flux/clusters/azalab-0/manifests/apps/clipy`.

@@ -12,7 +12,10 @@ from clipy.cutting import cut_clip
 
 FFMPEG = shutil.which("ffmpeg")
 FFPROBE = shutil.which("ffprobe")
-pytestmark = pytest.mark.skipif(not FFMPEG, reason="needs ffmpeg")
+pytestmark = [
+    pytest.mark.skipif(not FFMPEG, reason="needs ffmpeg"),
+    pytest.mark.xdist_group("cutting"),
+]
 
 
 def ffmpeg(*args: str) -> str:
@@ -35,9 +38,9 @@ def probe(path: Path) -> dict:
 def sources(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("media")
     frames = ["-f", "lavfi", "-i", "testsrc2=size=640x360:rate=60:duration=30"]
-    ffmpeg(*frames, "-c:v", "libx264", "-g", "300", "-keyint_min", "300",
+    ffmpeg(*frames, "-c:v", "libx264", "-preset", "ultrafast", "-threads", "2", "-g", "300", "-keyint_min", "300",
            "-sc_threshold", "0", "-pix_fmt", "yuv420p", str(tmp / "h264.mp4"))  # fmt: skip
-    ffmpeg(*frames, "-c:v", "libvpx-vp9", "-deadline", "realtime", "-g", "300",
+    ffmpeg(*frames, "-c:v", "libvpx-vp9", "-deadline", "realtime", "-cpu-used", "8", "-threads", "2", "-g", "300",
            str(tmp / "vp9.webm"))  # fmt: skip
     # A download cut short: the video stops at 15s, the audio runs on.
     ffmpeg("-i", str(tmp / "h264.mp4"), "-t", "15", "-c", "copy",

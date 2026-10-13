@@ -28,7 +28,7 @@ from mcp.server.mcpserver.utilities.types import Image
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 from starlette.requests import Request
-from starlette.responses import PlainTextResponse
+from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 
 from . import (
@@ -710,6 +710,16 @@ async def _healthz(_: Request) -> PlainTextResponse:
     return PlainTextResponse("ok")
 
 
+async def _releasez(_: Request) -> JSONResponse:
+    from .delivery import readiness
+
+    try:
+        result = await _sync(readiness)
+    except OSError, requests.RequestException, KeyError, ValueError:
+        result = {"revision": os.environ.get("CLIPY_REVISION", ""), "ready": False}
+    return JSONResponse(result, status_code=200 if result["ready"] else 503)
+
+
 async def _stats(_: Request) -> PlainTextResponse:
     """The stats header of the daily report, for agent/run.sh."""
     return PlainTextResponse(await _sync(stats.report))
@@ -719,7 +729,7 @@ class _Gate:
     """Every request except /healthz needs `Authorization: Bearer <token>`,
     and /mcp/<channel> serves the MCP endpoint for that channel."""
 
-    OPEN = frozenset({"/healthz"})
+    OPEN = frozenset({"/healthz", "/releasez"})
     GLOBAL = frozenset({"/stats"})
 
     def __init__(self, app, token: str):
@@ -780,7 +790,11 @@ def main() -> None:
             enable_dns_rebinding_protection=False
         ),
     )
-    app.router.routes += [Route("/healthz", _healthz), Route("/stats", _stats)]
+    app.router.routes += [
+        Route("/healthz", _healthz),
+        Route("/releasez", _releasez),
+        Route("/stats", _stats),
+    ]
     uvicorn.run(
         _Gate(app, token),
         host=os.environ.get("HOST", "0.0.0.0"),

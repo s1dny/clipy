@@ -18,7 +18,7 @@ RUN printf '%s  %s\n' \
     && mv /out/codex-x86_64-unknown-linux-musl /out/codex \
     && mv /out/codex-code-mode-host-x86_64-unknown-linux-musl /out/codex-code-mode-host
 
-FROM python:3.14-slim-trixie
+FROM python:3.14-slim-trixie AS dependencies
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -30,7 +30,26 @@ COPY --from=codex /out/ /usr/local/bin/
 WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PROJECT_ENVIRONMENT=/app/.venv
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --no-install-project
+
+# Expensive tools and dependencies are cached independently of source edits.
+FROM dependencies AS ci-dependencies
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
+RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-install-project
+RUN /app/.venv/bin/playwright install --with-deps chromium
+
+FROM ci-dependencies AS ci
+COPY clipy ./clipy
+COPY tests ./tests
+COPY thumbnails/*.jpg ./thumbnails/
+COPY agent ./agent
+COPY README.md ./
+RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen
+ENV PATH=/app/.venv/bin:$PATH PYTHONUNBUFFERED=1 HOME=/tmp
+CMD ["pytest", "-n", "4", "--dist", "loadgroup", "-q", "--durations=10", "tests"]
+
+FROM dependencies AS runtime-dependencies
+RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --no-install-project
+FROM runtime-dependencies AS runtime
 COPY clipy ./clipy
 COPY thumbnails/*.jpg ./thumbnails/
 COPY agent ./agent
@@ -42,6 +61,9 @@ ENV PATH=/app/.venv/bin:$PATH \
     PYTHONUNBUFFERED=1 \
     CLIPY_DATA_DIR=/data \
     HOME=/tmp
+ARG CLIPY_REVISION
+ENV CLIPY_REVISION=$CLIPY_REVISION
+LABEL org.opencontainers.image.revision=$CLIPY_REVISION
 USER 10001:10001
 EXPOSE 8000
 CMD ["clipy-mcp"]

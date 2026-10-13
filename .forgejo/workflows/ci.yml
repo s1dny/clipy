@@ -1,7 +1,4 @@
-name: CI
-
-# Runs on azalab-0. Flux deploys each image this publishes; an image is only
-# published from a main commit whose checks passed.
+name: Deliver
 
 on:
   pull_request:
@@ -10,39 +7,18 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: clipy-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: uv and ffmpeg
-        run: |
-          sudo apt-get update && sudo apt-get install -y ffmpeg
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - run: uv sync --frozen
-      - run: uv run playwright install --with-deps chromium
-      - run: uv run ruff format --check .
-      - run: uv run ruff check .
-      - run: uv run pytest -q tests
-
-  image:
-    needs: check
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+  deliver:
     runs-on: host
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: Build and publish
+      - name: Test, publish and verify production within five minutes
         env:
+          FORGEJO_TOKEN: ${{ github.token }}
           REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
-        run: |
-          DOCKER_CONFIG="$(mktemp -d)"
-          export DOCKER_CONFIG
-          trap 'rm -rf "$DOCKER_CONFIG"' EXIT
-          echo "$REGISTRY_TOKEN" | docker login git.aza.network --username aiden --password-stdin
-          image="git.aza.network/aza/clipy:main-${GITHUB_SHA::12}-${GITHUB_RUN_NUMBER}"
-          docker build --tag "$image" .
-          docker push "$image"
+          CLIPY_RELEASE_URL: http://10.43.100.200:8000/releasez
+        run: bash scripts/deliver.sh
