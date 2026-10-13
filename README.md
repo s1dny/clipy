@@ -9,6 +9,7 @@ hours if it is not monetized yet.
 | Channel | Who appears | Goal |
 |---|---|---|
 | [Jonathan Blow Clips](https://www.youtube.com/@JonathanBlowClips) (`blow`) | Jonathan Blow only | Ad revenue |
+| [Casey Muratori Clips](https://www.youtube.com/@caseymuratoriclips) (`casey`) | Casey Muratori only | Watch hours |
 | [George Hotz Clips](https://www.youtube.com/@georgehotzclips) (`hotz`) | George Hotz only | Watch hours |
 | [Science Clips Daily](https://www.youtube.com/@ScienceClipsDaily) (`science`) | Anyone credible explaining science | Watch hours |
 | [Philosophy Clips Daily](https://www.youtube.com/@PhilosophyClipsDaily) (`philosophy`) | Anyone credible on philosophy and big ideas | Watch hours |

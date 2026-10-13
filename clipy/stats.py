@@ -15,6 +15,7 @@ CHANNEL_LABELS = {
     "science": "Science",
     "philosophy": "Philosophy",
     "hotz": "Hotz",
+    "casey": "Casey",
 }
 
 
