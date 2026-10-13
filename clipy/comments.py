@@ -4,11 +4,13 @@ import fcntl
 import logging
 import os
 import re
-from datetime import UTC, datetime
+import threading
+from datetime import UTC, datetime, timedelta
 
 from playwright.sync_api import TimeoutError as BrowserTimeout
 from playwright.sync_api import sync_playwright
 
+from .channel import all_channels
 from .common import read_json_file, write_json_file
 from .queue import load_queue
 
@@ -96,7 +98,7 @@ def comment_and_pin(video_id: str, handle: str, state: dict, save) -> None:
             browser.close()
 
 
-def run(channel) -> dict:
+def run(channel, *, respect_retry: bool = False) -> dict:
     """Serialize the CLI and collector so they cannot post the same comment."""
     channel.dir.mkdir(parents=True, exist_ok=True)
     with (channel.dir / "follow-comments.lock").open("a") as lock:
@@ -104,20 +106,18 @@ def run(channel) -> dict:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return {"pinned": 0, "errors": []}
-        return _run(channel)
+        return _run(channel, respect_retry=respect_retry)
 
 
-def _run(channel) -> dict:
+def _run(channel, *, respect_retry: bool = False) -> dict:
     """Retry unfinished new uploads; private/scheduled videos stay untouched."""
-    targets = [
-        i["youtube_id"]
-        for i in load_queue(channel.queue_file)
-        if i.get("follow_comment_pending") and i.get("youtube_id")
-    ]
     path = channel.dir / "follow-comments.json"
     states = read_json_file(path) if path.exists() else {}
+    now = datetime.now(UTC)
     targets = [
-        v for v in dict.fromkeys(targets) if not states.get(v, {}).get("pinned_at")
+        video_id
+        for video_id, due in pending(channel, states, respect_retry=respect_retry)
+        if due <= now
     ]
     errors, pinned = [], 0
     if not targets:
@@ -135,6 +135,10 @@ def _run(channel) -> dict:
                 .execute()["items"]
             )
             if not videos or videos[0]["status"]["privacyStatus"] != "public":
+                state["next_attempt_at"] = (
+                    datetime.now(UTC) + timedelta(minutes=10)
+                ).isoformat()
+                write_json_file(path, states)
                 continue
             if videos[0]["snippet"]["channelId"] != channel_id:
                 raise ValueError("Upload does not belong to the authenticated channel")
@@ -146,9 +150,13 @@ def _run(channel) -> dict:
             )
             state["pinned_at"] = datetime.now(UTC).isoformat()
             state.pop("error", None)
+            state.pop("next_attempt_at", None)
             pinned += 1
         except Exception as exc:  # noqa: BLE001 - retry one failure without blocking other uploads
             state["error"] = type(exc).__name__
+            state["next_attempt_at"] = (
+                datetime.now(UTC) + timedelta(minutes=10)
+            ).isoformat()
             errors.append({"video_id": video_id, "error": type(exc).__name__})
             logger.warning(
                 "Follow comment incomplete for %s/%s: %s",
@@ -158,3 +166,118 @@ def _run(channel) -> dict:
             )
         write_json_file(path, states)
     return {"pinned": pinned, "errors": errors}
+
+
+def pending(
+    channel, states: dict, *, respect_retry: bool = True
+) -> list[tuple[str, datetime]]:
+    """Local release deadlines; this never contacts YouTube."""
+    deadlines = {}
+    for item in load_queue(channel.queue_file):
+        video_id = item.get("youtube_id")
+        state = states.get(video_id, {})
+        if (
+            not video_id
+            or not item.get("follow_comment_pending")
+            or state.get("pinned_at")
+        ):
+            continue
+        due = (
+            datetime.fromisoformat(item["publish_at"])
+            if item.get("publish_at")
+            else datetime.min.replace(tzinfo=UTC)
+        )
+        if respect_retry and state.get("next_attempt_at"):
+            due = max(due, datetime.fromisoformat(state["next_attempt_at"]))
+        deadlines[video_id] = due
+    return list(deadlines.items())
+
+
+def serve() -> None:
+    """Wake at release times or filesystem changes, and resume after restarts."""
+    from watchfiles import watch
+
+    channels = all_channels()
+    for channel in channels:
+        channel.dir.mkdir(parents=True, exist_ok=True)
+    wake, stop = threading.Event(), threading.Event()
+
+    def changed():
+        try:
+            for _ in watch(
+                *(channel.dir for channel in channels),
+                recursive=False,
+                watch_filter=lambda _change, path: path.endswith(
+                    ("upload_queue.json", "follow-comments.json")
+                ),
+                stop_event=stop,
+                debounce=50,
+                step=50,
+                force_polling=False,
+            ):
+                wake.set()
+        except Exception:
+            logger.exception("Comment queue watcher failed")
+        finally:
+            stop.set()
+            wake.set()
+
+    watcher = threading.Thread(target=changed, name="comment-queue-events", daemon=True)
+    watcher.start()
+    unavailable = {}
+    try:
+        while not stop.is_set():
+            wake.clear()
+            deadlines = []
+            for channel in channels:
+                try:
+                    path = channel.dir / "follow-comments.json"
+                    states = read_json_file(path) if path.exists() else {}
+                    times = [due for _, due in pending(channel, states)]
+                    if not times:
+                        continue
+                    due = max(
+                        min(times),
+                        unavailable.get(channel.name, datetime.min.replace(tzinfo=UTC)),
+                    )
+                    if due <= datetime.now(UTC):
+                        result = run(channel, respect_retry=True)
+                        write_json_file(
+                            channel.dir / "follow-comments-status.json",
+                            {
+                                **result,
+                                "checked_at": datetime.now(UTC).isoformat(),
+                                "trigger": "scheduled_release",
+                            },
+                        )
+                        states = read_json_file(path) if path.exists() else {}
+                        times = [due for _, due in pending(channel, states)]
+                        unavailable.pop(channel.name, None)
+                    deadlines.extend(
+                        max(
+                            t,
+                            unavailable.get(
+                                channel.name, datetime.min.replace(tzinfo=UTC)
+                            ),
+                        )
+                        for t in times
+                    )
+                except Exception:
+                    logger.exception(
+                        "Comment scheduler failed for %s; retrying in ten minutes",
+                        channel.name,
+                    )
+                    unavailable[channel.name] = datetime.now(UTC) + timedelta(
+                        minutes=10
+                    )
+                    deadlines.append(unavailable[channel.name])
+            if deadlines:
+                delay = max(0.1, (min(deadlines) - datetime.now(UTC)).total_seconds())
+                logger.info("Next scheduled comment attempt in %.1f seconds", delay)
+            else:
+                delay = None
+                logger.info("Waiting for newly uploaded clips")
+            wake.wait(delay)
+    finally:
+        stop.set()
+        watcher.join(timeout=6)

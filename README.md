@@ -66,12 +66,14 @@ partway picks up where it left off. Jobs from all channels share one queue and
 run one at a time.
 
 Every new upload receives `feel free to follow me on x :) https://x.com/aidensidny`
-as a pinned comment after it becomes public. The hourly collector posts it
-and pins it in an isolated copy of the signed-in
+as a pinned comment after it becomes public. `clipy comments-serve` watches
+local upload-queue changes and wakes at each video's `publish_at` time. It
+confirms public status, then posts and pins in an isolated copy of the signed-in
 server browser, selecting the owning channel. Private scheduled uploads stay
-private. Failed comments or pins retry on the next collection (after five
-minutes on failure); submission state persists to avoid duplicates. Pinning
-requires the server browser login and YouTube's advanced features access.
+private. If release is delayed or posting/pinning fails, only that upload is
+retried ten minutes later. Submission state persists to avoid duplicates, and
+restart recovery catches overdue releases. Pinning requires the server browser
+login and YouTube's advanced features access. Analytics collection stays hourly.
 The original-video link includes the clip's start timestamp.
 
 Clips are fully re-encoded with aligned audio and video timelines. This avoids

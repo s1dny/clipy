@@ -18,7 +18,6 @@ from playwright.sync_api import sync_playwright
 
 from .analytics import channel_videos
 from .channel import Channel, all_channels, data_root
-from .comments import run as comment_uploads
 from .common import read_json_file, write_json_file
 from .studio import record
 
@@ -357,12 +356,6 @@ def _run(channel_name: str | None = None) -> int:
                     "errors": [{"error": type(exc).__name__}],
                     "method": "direct_api",
                 }
-            try:
-                comments = comment_uploads(channel)
-            except Exception as exc:  # noqa: BLE001 - comments retry independently of analytics
-                comments = {"pinned": 0, "errors": [{"error": type(exc).__name__}]}
-            write_json_file(channel.dir / "follow-comments-status.json", comments)
-            failed |= bool(comments["errors"])
             write_json_file(channel.dir / "studio-status.json", status)
             failed |= bool(status["errors"])
     finally:

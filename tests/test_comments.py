@@ -5,10 +5,12 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from datetime import UTC, datetime, timedelta
 from http.server import ThreadingHTTPServer
 from urllib.parse import urlsplit
 
+import pytest
 from playwright.sync_api import sync_playwright
 from test_mcp_server import CONFIG, _clip, _free_port
 from test_upload_recovery import LAUNCHER, YouTube
@@ -18,6 +20,7 @@ from clipy.comments import FOLLOW_COMMENT
 
 class Comments(YouTube):
     privacy = "private"
+    public_checks = 0
     posted = 0
     pins = 0
     fail_pin = False
@@ -27,6 +30,7 @@ class Comments(YouTube):
         if path.endswith("/channels"):
             self.reply({"items": [{"id": "channel-owned"}]})
         elif path.endswith("/videos"):
+            type(self).public_checks += 1
             self.reply(
                 {
                     "items": [
@@ -108,7 +112,8 @@ main()
 )
 
 
-def test_private_upload_waits_then_posts_and_pins_once_with_retry(tmp_path):
+@pytest.mark.parametrize("scheduled", [False, True])
+def test_private_upload_waits_then_posts_and_pins_once_with_retry(tmp_path, scheduled):
     config = tmp_path / "config.toml"
     config.write_text(CONFIG)
     item = _clip(
@@ -141,6 +146,7 @@ def test_private_upload_waits_then_posts_and_pins_once_with_retry(tmp_path):
             }
         )
     )
+    Comments.public_checks = 0
     Comments.privacy = "private"
     Comments.posted = 0
     Comments.pins = 0
@@ -170,25 +176,79 @@ def test_private_upload_waits_then_posts_and_pins_once_with_retry(tmp_path):
             )
 
         try:
-            result = run()
-            assert result.returncode == 0, result.stderr
-            assert Comments.posted == 0 and Comments.pins == 0
-            Comments.privacy = "public"
-            Comments.fail_pin = True
-            assert run().returncode == 1
-            saved = json.loads((queue.parent / "follow-comments.json").read_text())
-            assert saved["new-upload"]["posted_at"]
-            assert not saved["new-upload"].get("pinned_at")
-            Comments.fail_pin = False
-            result = run()
-            assert result.returncode == 0, result.stderr
-            assert Comments.pins == 1 and Comments.posted == 1
-            assert run().returncode == 0
-            assert Comments.pins == 1 and Comments.posted == 1
-            assert json.loads((queue.parent / "follow-comments.json").read_text())[
-                "new-upload"
-            ]["pinned_at"]
-            assert json.loads(queue.read_text()) == [item]
+            if scheduled:
+                Comments.privacy = "public"
+                item["publish_at"] = (
+                    datetime.now(UTC) + timedelta(hours=1)
+                ).isoformat()
+                queue.write_text(json.dumps([item]))
+                log = tmp_path / "scheduler.log"
+                with log.open("w") as output:
+                    worker = subprocess.Popen(
+                        [sys.executable, "-c", COMMENT_LAUNCHER, "comments-serve"],
+                        env=env,
+                        stdout=output,
+                        stderr=output,
+                    )
+                try:
+                    deadline = time.monotonic() + 15
+                    while "Next scheduled comment attempt" not in log.read_text():
+                        assert worker.poll() is None and time.monotonic() < deadline, (
+                            log.read_text()
+                        )
+                        time.sleep(0.05)
+                    assert Comments.public_checks == 0
+                    item["publish_at"] = (
+                        datetime.now(UTC) + timedelta(seconds=3)
+                    ).isoformat()
+                    replacement = queue.with_suffix(".tmp")
+                    replacement.write_text(json.dumps([item]))
+                    replacement.replace(queue)
+                    time.sleep(1)
+                    assert Comments.public_checks == 0 and Comments.posted == 0
+                    state_path = queue.parent / "follow-comments.json"
+                    deadline = time.monotonic() + 25
+                    while not state_path.exists() or not json.loads(
+                        state_path.read_text()
+                    ).get("new-upload", {}).get("pinned_at"):
+                        assert worker.poll() is None and time.monotonic() < deadline, (
+                            log.read_text()
+                        )
+                        time.sleep(0.05)
+                    assert (
+                        Comments.public_checks == 1
+                        and Comments.posted == 1
+                        and Comments.pins == 1
+                    )
+                    worker.terminate()
+                    worker.wait(timeout=5)
+                    result = run()
+                    assert result.returncode == 0, result.stderr
+                    assert Comments.public_checks == 1 and Comments.posted == 1
+                finally:
+                    if worker.poll() is None:
+                        worker.terminate()
+                        worker.wait(timeout=5)
+            else:
+                result = run()
+                assert result.returncode == 0, result.stderr
+                assert Comments.posted == 0 and Comments.pins == 0
+                Comments.privacy = "public"
+                Comments.fail_pin = True
+                assert run().returncode == 1
+                saved = json.loads((queue.parent / "follow-comments.json").read_text())
+                assert saved["new-upload"]["posted_at"]
+                assert not saved["new-upload"].get("pinned_at")
+                Comments.fail_pin = False
+                result = run()
+                assert result.returncode == 0, result.stderr
+                assert Comments.pins == 1 and Comments.posted == 1
+                assert run().returncode == 0
+                assert Comments.pins == 1 and Comments.posted == 1
+                assert json.loads((queue.parent / "follow-comments.json").read_text())[
+                    "new-upload"
+                ]["pinned_at"]
+                assert json.loads(queue.read_text()) == [item]
         finally:
             browser.close()
             fake.shutdown()

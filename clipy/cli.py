@@ -38,10 +38,18 @@ def main() -> None:
         "comments", help="post and pin follow comments on new public uploads"
     )
     comments.add_argument("channel")
+    commands.add_parser(
+        "comments-serve", help="post and pin comments at scheduled release times"
+    )
     args = parser.parse_args()
 
     load_dotenv(PROJECT_ROOT / ".env")
     setup_logging()
+    if args.command == "comments-serve":
+        from .comments import serve
+
+        serve()
+        return
     if args.command == "studio-collect":
         from .studio_collect import run
 
