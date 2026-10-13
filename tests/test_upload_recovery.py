@@ -146,6 +146,7 @@ main()
     "mode",
     [
         "reset",
+        "legacy",
         "missing",
         "existing",
         "ambiguous",
@@ -165,6 +166,8 @@ def test_publish_recovers_without_duplicate_upload(tmp_path, mode):
         source,
         "01",
         status="pending" if mode == "reset" else "failed",
+        start_ms=7300,
+        cut_encoding="full",
         publish_at=(datetime.now(UTC) + timedelta(days=2))
         .isoformat(timespec="seconds")
         .replace("+00:00", "Z"),
@@ -172,11 +175,14 @@ def test_publish_recovers_without_duplicate_upload(tmp_path, mode):
     media = tmp_path / "channels/blow" / source / "clips/01 - Clip 01/video.mp4"
     media.write_bytes(b"video" * 400)
     queue = tmp_path / "channels/blow/upload_queue.json"
+    if mode == "legacy":
+        item.pop("cut_encoding")
+        item.pop("start_ms")
     if repairing:
         item.update(status="uploaded", youtube_id="existing-upload")
     queue.write_text(json.dumps([item]))
     asset = tmp_path / "source.mp4"
-    if mode == "repair":
+    if mode in {"repair", "legacy"}:
         subprocess.run(
             [
                 "ffmpeg",
@@ -201,7 +207,8 @@ def test_publish_recovers_without_duplicate_upload(tmp_path, mode):
         (media.parents[2] / "clips.json").write_text(
             json.dumps([{"start_ms": 0, "end_ms": 1000}])
         )
-        media.unlink()
+        if mode == "repair":
+            media.unlink()
     token = tmp_path / "channels/blow/.youtube_token.json"
     token.write_text(
         json.dumps(
@@ -280,7 +287,7 @@ def test_publish_recovers_without_duplicate_upload(tmp_path, mode):
             "HOST": "127.0.0.1",
             "PORT": str(port),
             "FAKE_GOOGLE_URL": f"http://127.0.0.1:{fake.server_port}",
-            "FAKE_MEDIA": str(asset) if mode == "repair" else "",
+            "FAKE_MEDIA": str(asset) if mode in {"repair", "legacy"} else "",
         },
     )
     server = (f"http://127.0.0.1:{port}", tmp_path)
@@ -349,12 +356,29 @@ def test_publish_recovers_without_duplicate_upload(tmp_path, mode):
             assert job["status"] == "succeeded", job
             assert saved["status"] == "uploaded"
             assert saved["publish_at"] == item["publish_at"]
-            assert YouTube.sessions == (1 if mode in {"reset", "missing"} else 0)
+            assert YouTube.sessions == (
+                1 if mode in {"reset", "missing", "legacy"} else 0
+            )
             assert YouTube.thumbnails == 1
             assert media.exists() == (mode != "existing")
             assert saved["youtube_id"] == (
-                "new-upload" if mode in {"reset", "missing"} else "existing-upload"
+                "new-upload"
+                if mode in {"reset", "missing", "legacy"}
+                else "existing-upload"
             )
+            if mode == "legacy":
+                assert saved["cut_encoding"] == "full"
+                assert (
+                    "watch?v=aaaaaaaaaaa&t=0s"
+                    in YouTube.inserted["snippet"]["description"]
+                )
+                assert media.with_suffix(".encoding").read_text() == "full"
+            if mode in {"reset", "missing"}:
+                assert (
+                    "watch?v=aaaaaaaaaaa&t=7s"
+                    in YouTube.inserted["snippet"]["description"]
+                )
+                assert saved["follow_comment_pending"]
             if mode == "reset":
                 assert YouTube.probes == 1
     finally:

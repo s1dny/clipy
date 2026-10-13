@@ -65,6 +65,20 @@ clip to the channel's queue. Every step saves its result, so a job that stops
 partway picks up where it left off. Jobs from all channels share one queue and
 run one at a time.
 
+Every new upload receives `feel free to follow me on x :) https://x.com/aidensidny`
+as a pinned comment after it becomes public. The hourly collector posts it
+and pins it in an isolated copy of the signed-in
+server browser, selecting the owning channel. Private scheduled uploads stay
+private. Failed comments or pins retry on the next collection (after five
+minutes on failure); submission state persists to avoid duplicates. Pinning
+requires the server browser login and YouTube's advanced features access.
+The original-video link includes the clip's start timestamp.
+
+Clips are fully re-encoded with aligned audio and video timelines. This avoids
+the frame repetition and audio drift possible when splicing copied H.264
+onto a re-encoded opening segment. Older queued clips are rebuilt with full
+encoding before upload; already uploaded videos are left as they are.
+
 **Thumbnails** have a picture on the left and, on the white right side, an
 illustration of the clip's main idea made by an image model. For Jonathan
 Blow the picture is a fixed template, `thumbnails/blow.jpg`. For the other
@@ -96,12 +110,12 @@ unrounded totals, provider estimates, missing values and failures. The agent
 reads these results through `recent_performance`; older UI revenue without a
 verified currency is left unknown.
 
-Chromium is for interactive Google sign-in and cookie recovery only. Collection
+Chromium is used for comment pinning, interactive Google sign-in and cookie recovery. Analytics collection
 never opens analytics pages or reads DOM cards. On authentication failure it
 refreshes the HTTP client context, then reads the browser's live cookie jar
 once if necessary. Only a successfully authenticated, channel-checked response
 can update the owner-only cookie checkpoint. Response cookie updates persist
-between runs, so normal collection also works while the browser is unavailable.
+between runs, so analytics collection also works while the browser is unavailable.
 Google can still require interactive sign-in if it revokes the session.
 
 The browser and collector run on azalab-0 without a Mac or Codex calls. Their

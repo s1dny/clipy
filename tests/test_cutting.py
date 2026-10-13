@@ -42,19 +42,19 @@ def sources(tmp_path_factory):
     # A download cut short: the video stops at 15s, the audio runs on.
     ffmpeg("-i", str(tmp / "h264.mp4"), "-t", "15", "-c", "copy",
            str(tmp / "truncated.mp4"))  # fmt: skip
-    ffmpeg("-f", "lavfi", "-i", "sine=frequency=440:duration=30",
+    ffmpeg("-f", "lavfi", "-i", "aevalsrc=sin(2*PI*(300*t+25*t*t)):s=48000:d=30",
            "-c:a", "libopus", str(tmp / "audio.webm"))  # fmt: skip
     return tmp
 
 
-def first_frame_matches_source(clip: Path, source: Path, at: float) -> float:
+def frame_matches_source(clip: Path, source: Path, at: float, clip_at: float) -> float:
     """SSIM of the clip's first frame against the source frame at `at`."""
     graph = (
         "[0:v]trim=end_frame=1,setpts=PTS-STARTPTS[a];"
         "[1:v]trim=end_frame=1,setpts=PTS-STARTPTS[b];[a][b]ssim=stats_file=-"
     )
     stats = subprocess.run(
-        [FFMPEG, "-v", "error", "-i", str(clip), "-ss", str(at), "-i", str(source),
+        [FFMPEG, "-v", "error", "-ss", str(clip_at), "-i", str(clip), "-ss", str(at), "-i", str(source),
          "-lavfi", graph, "-f", "null", "-"],
         capture_output=True, text=True, check=True,
     ).stdout  # fmt: skip
@@ -75,7 +75,40 @@ def test_clip_is_frame_accurate_and_complete(sources, source):
     assert float(info["format"]["duration"]) == pytest.approx(12.7, abs=0.05)
     assert int(streams["video"]["nb_read_frames"]) == pytest.approx(12.7 * 60, abs=2)
     assert ffmpeg("-i", str(clip), "-f", "null", "-") == ""  # decodes cleanly
-    assert first_frame_matches_source(clip, video, 7.3) > 0.98
+    for at in (0, 3, 7, 11):
+        assert frame_matches_source(clip, video, 7.3 + at, at) > 0.98
+    import numpy as np
+
+    def samples(path, start):
+        return np.frombuffer(
+            subprocess.check_output(
+                [
+                    FFMPEG,
+                    "-v",
+                    "error",
+                    "-ss",
+                    str(start),
+                    "-i",
+                    str(path),
+                    "-t",
+                    "1",
+                    "-vn",
+                    "-ac",
+                    "1",
+                    "-ar",
+                    "8000",
+                    "-f",
+                    "f32le",
+                    "-",
+                ]
+            ),
+            dtype=np.float32,
+        )
+
+    for at in (0, 3, 7, 11):
+        actual, expected = samples(clip, at), samples(sources / "audio.webm", 7.3 + at)
+        length = min(len(actual), len(expected))
+        assert np.corrcoef(actual[:length], expected[:length])[0, 1] > 0.97
     assert not list(sources.glob("*.partial.*"))
 
 

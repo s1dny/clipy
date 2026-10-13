@@ -141,6 +141,7 @@ def _publish_job(name: str, args: dict) -> str:
                 raise ValueError(
                     "A matching YouTube upload is not complete; check its status before retrying."
                 )
+            item["follow_comment_pending"] = True
             item["youtube_id"] = matches[0]["id"]
             item["youtube_url"] = f"https://youtube.com/watch?v={matches[0]['id']}"
             set_thumbnail(channel.youtube(), item)
@@ -155,6 +156,10 @@ def _publish_job(name: str, args: dict) -> str:
     item["publish_at"] = args.get("publish_at")
     config = channel.config().channel
     try:
+        if item.get("cut_encoding") != "full":
+            # Pending clips cut by the old splice path must also be rebuilt;
+            # otherwise cached media could carry the same drift into new uploads.
+            recovery._rebuild(channel, item)
         upload_video(
             channel.youtube(),
             item,

@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 
 from .clips import chapters_text
+from .common import read_json_file
 from .queue import item_id
 
 logger = logging.getLogger(__name__)
@@ -110,9 +111,23 @@ def full_description(item: dict, description_template: str) -> str:
     body = item.get("description", "")
     if item.get("chapters"):
         body += "\n\nChapters\n" + chapters_text(item["chapters"])
+    start_ms = item.get("start_ms")
+    if start_ms is None:
+        # Queues created before timestamps were stored retain the source cut
+        # metadata in clips.json, even after the media has been cleaned up.
+        clip_path = Path(item["clip_path"])
+        parts = clip_path.parts
+        index = parts.index("clips")
+        metadata = Path(*parts[:index]) / "clips.json"
+        if metadata.exists():
+            number = int(item_id(item).split(":")[1])
+            start_ms = read_json_file(metadata)[number - 1]["start_ms"]
+    original_url = f"https://youtube.com/watch?v={source_id}"
+    if start_ms is not None:
+        original_url += f"&t={int(start_ms // 1000)}s"
     return description_template.format(
         clip_description=body,
-        original_url=f"https://youtube.com/watch?v={source_id}",
+        original_url=original_url,
     )
 
 
@@ -175,6 +190,7 @@ def upload_video(
             # next_chunk queries this session's received bytes after a transport
             # error, so retrying it cannot insert a second video.
             time.sleep(2 ** (failures - 1))
+    item["follow_comment_pending"] = True
     item["youtube_id"] = response["id"]
     item["youtube_url"] = f"https://youtube.com/watch?v={response['id']}"
     logger.info("Uploaded %s", item["youtube_url"])

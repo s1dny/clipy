@@ -123,11 +123,14 @@ def _rebuild(channel: Channel, item: dict) -> None:
             clip["end_ms"],
             output,
             channel.config().ffmpeg,
-            smart=False,
         ):
             raise RuntimeError(
                 "Could not rebuild the clip; original upload is unchanged."
             )
+
+    item["cut_encoding"] = "full"
+    item["start_ms"] = clip["start_ms"]
+    item["end_ms"] = clip["end_ms"]
 
 
 def repair(channel: Channel, video_id: str, publish_at: str | None = None) -> str:

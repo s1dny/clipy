@@ -30,6 +30,9 @@ def save_queue(clips: list[dict], queue_file: Path) -> None:
                 existing["thumbnail_path"] = clip["thumbnail_path"]
             existing.setdefault("chapters", clip.get("chapters", []))
             existing.setdefault("speaker", clip.get("speaker"))
+            existing.setdefault("start_ms", clip["start_ms"])
+            existing.setdefault("end_ms", clip["end_ms"])
+            existing["cut_encoding"] = clip.get("cut_encoding", "legacy")
             continue
 
         item = {
@@ -41,6 +44,9 @@ def save_queue(clips: list[dict], queue_file: Path) -> None:
             "thumbnail_prompt": clip.get("thumbnail_prompt"),
             "chapters": clip.get("chapters", []),
             "score": clip.get("score"),
+            "cut_encoding": clip.get("cut_encoding", "legacy"),
+            "start_ms": clip["start_ms"],
+            "end_ms": clip["end_ms"],
             "duration_seconds": round((clip["end_ms"] - clip["start_ms"]) / 1000),
             "status": "pending",
             "created_at": datetime.now(UTC).isoformat(),
