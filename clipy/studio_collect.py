@@ -133,7 +133,9 @@ class StudioClient:
         self.configs[channel_id] = config
         return config
 
-    def _cards(self, channel_id, video_id, currency, start=None, end=None):
+    def _cards(
+        self, channel_id, video_id, currency, start=None, end=None, include_revenue=True
+    ):
         config = self.configs.get(channel_id) or self._bootstrap(channel_id)
         cookie = self.session.cookies.get("SAPISID", domain=".youtube.com", path="/")
         if not cookie:
@@ -156,6 +158,10 @@ class StudioClient:
         context.setdefault("user", {})["delegationContext"] = config[
             "DELEGATION_CONTEXT"
         ]
+        if config.get("INNERTUBE_CONTEXT_SERIALIZED_DELEGATION_CONTEXT"):
+            context["user"]["serializedDelegationContext"] = config[
+                "INNERTUBE_CONTEXT_SERIALIZED_DELEGATION_CONTEXT"
+            ]
         entity = {"videoId": video_id} if video_id else {"channelId": channel_id}
         period = (
             {
@@ -188,7 +194,11 @@ class StudioClient:
                     "autoUpdateInterval": "ANALYTICS_AUTO_UPDATE_INTERVAL_NEVER",
                     "keyMetricCardConfig": {
                         "timePeriod": {},
-                        "metricTabConfigs": [{"metric": metric} for metric in METRICS],
+                        "metricTabConfigs": [
+                            {"metric": metric}
+                            for metric in METRICS
+                            if include_revenue or metric != "TOTAL_ESTIMATED_EARNINGS"
+                        ],
                     },
                     "failureMode": "ANALYTICS_CARD_FAILURE_MODE_FAIL_PAGE",
                     "disableSeeMoreButton": True,
@@ -260,18 +270,33 @@ class StudioClient:
             raise ValueError("Studio returned no metric totals")
         return {name: values.get(name) for name, _ in METRICS.values()}, estimated
 
-    def readings(self, channel_id, video_id, currency="USD", *, start=None, end=None):
+    def readings(
+        self,
+        channel_id,
+        video_id,
+        currency="USD",
+        *,
+        start=None,
+        end=None,
+        include_revenue=True,
+    ):
         try:
-            return self._cards(channel_id, video_id, currency, start, end)
+            return self._cards(
+                channel_id, video_id, currency, start, end, include_revenue
+            )
         except StudioAuthRequired:
             # Refresh client variables and cookie state once. A revoked Google
             # login is reported, never disguised as a zero-valued reading.
             self.configs.pop(channel_id, None)
             try:
-                return self._cards(channel_id, video_id, currency, start, end)
+                return self._cards(
+                    channel_id, video_id, currency, start, end, include_revenue
+                )
             except StudioAuthRequired:
                 self._recover_browser_login()
-                return self._cards(channel_id, video_id, currency, start, end)
+                return self._cards(
+                    channel_id, video_id, currency, start, end, include_revenue
+                )
 
     def checkpoint(self):
         path = _session_path()
@@ -301,12 +326,14 @@ class StudioClient:
 
 
 def collect(channel: Channel, client: StudioClient) -> dict:
-    channel_id = (
+    account = (
         channel.youtube()
         .channels()
-        .list(part="snippet", mine=True)
-        .execute()["items"][0]["id"]
+        .list(part="snippet,status", mine=True)
+        .execute()["items"][0]
     )
+    channel_id = account["id"]
+    monetized = account.get("status", {}).get("isChannelMonetizationEnabled", False)
     public = [
         v for v in channel_videos(channel, refresh=True) if v["privacy"] == "public"
     ]
@@ -327,11 +354,14 @@ def collect(channel: Channel, client: StudioClient) -> dict:
     try:
         end = datetime.now(ZoneInfo("Australia/Sydney")).date()
         start = end - timedelta(days=70)
-        daily, approximate = client.readings(channel_id, None, start=start, end=end)
+        daily, approximate = client.readings(
+            channel_id, None, start=start, end=end, include_revenue=monetized
+        )
         write_json_file(
             channel.dir / "studio-channel.json",
             {
                 "channel_id": channel_id,
+                "monetized": monetized,
                 "observed_at": datetime.now(UTC).isoformat(),
                 "source": "YouTube Studio internal analytics API",
                 "currency": "USD",

@@ -21,6 +21,7 @@ class Metrics(YouTube):
     studio_bootstraps = 0
     studio_calls = 0
     studio_wrong_channel = False
+    monetized = True
 
     def do_GET(self):
         query = parse_qs(urlsplit(self.path).query)
@@ -92,6 +93,9 @@ class Metrics(YouTube):
                     "items": [
                         {
                             "id": "channel-owned",
+                            "status": {
+                                "isChannelMonetizationEnabled": type(self).monetized
+                            },
                             "snippet": {"title": "Test Channel"},
                             "statistics": {"subscriberCount": "11200"},
                             "contentDetails": {
@@ -122,10 +126,20 @@ class Metrics(YouTube):
                 query["screenConfig"]["timePeriod"]["timePeriodType"]
                 == "ANALYTICS_TIME_PERIOD_TYPE_SINCE_PUBLISH"
             )
+        requested = {
+            m["metric"]
+            for m in query["cardConfigs"][0]["keyMetricCardConfig"]["metricTabConfigs"]
+        }
+        if channel_totals:
+            assert ("TOTAL_ESTIMATED_EARNINGS" in requested) == type(self).monetized
         assert query["screenConfig"]["currency"] == "USD"
         assert (
             query["context"]["user"]["delegationContext"]["externalChannelId"]
             == "channel-owned"
+        )
+        assert (
+            query["context"]["user"]["serializedDelegationContext"]
+            == "fixture-delegation"
         )
         assert self.headers["X-Youtube-Client-Version"] == str(
             type(self).studio_bootstraps
@@ -203,6 +217,7 @@ class Metrics(YouTube):
                                     "primaryContent": content(metric, value),
                                 }
                                 for metric, value in values.items()
+                                if metric in requested
                             ]
                         },
                     }
@@ -220,6 +235,7 @@ def metric_server(tmp_path):
     Metrics.studio_bootstraps = 0
     Metrics.studio_calls = 0
     Metrics.studio_wrong_channel = False
+    Metrics.monetized = True
     channel = tmp_path / "channels/blow"
     channel.mkdir(parents=True)
     (tmp_path / "config.toml").write_text(CONFIG.split("[channels.science]")[0])
@@ -392,12 +408,15 @@ def test_private_video_preview_uses_api_renditions_when_maxres_is_missing(
     assert preview.size == (1920, 1080)
 
 
-@pytest.mark.parametrize("wrong_channel", [False, True])
+@pytest.mark.parametrize(
+    "wrong_channel,monetized", [(False, True), (False, False), (True, True)]
+)
 def test_direct_studio_collection_refreshes_auth_without_rendering(
-    metric_server, wrong_channel
+    metric_server, wrong_channel, monetized
 ):
     server, env = metric_server
     Metrics.studio_wrong_channel = wrong_channel
+    Metrics.monetized = monetized
     session = server[1] / "private-session.json"
     session.write_text(
         json.dumps(
@@ -495,12 +514,16 @@ main()
             ).text
             assert "Views: **9,401**" in header
             assert "Subscribers: **-2**" in header
-            assert "Earnings (through " in header and "**$2.47**" in header
+            if monetized:
+                assert "Earnings (through " in header and "**$2.47**" in header
+            else:
+                assert "Earnings: unavailable" in header
+                assert "**$2.47**" not in header
             assert "YouTube Studio estimates" in header
             path = server[1] / "channels/blow/studio-channel.json"
             snapshot = json.loads(path.read_text())
             assert snapshot["currency"] == "USD"
-            assert snapshot["daily"][max(snapshot["daily"])]["revenue_usd"] is None
+            assert snapshot["daily"][max(snapshot["daily"])].get("revenue_usd") is None
             snapshot["observed_at"] = (
                 datetime.now(UTC) - timedelta(hours=3)
             ).isoformat()

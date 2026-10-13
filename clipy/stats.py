@@ -153,10 +153,19 @@ def report() -> str:
                 lines.append(f"• {names[name]}: unavailable ({unavailable[name]})  ")
             else:
                 value = rows[name][0]
+                unavailable_label = "pending / unavailable"
+                if (
+                    metric == "earnings"
+                    and read_json_file(channel.dir / "studio-channel.json").get(
+                        "monetized"
+                    )
+                    is False
+                ):
+                    unavailable_label = "not monetized"
                 lines.append(
                     f"• {names[name]}: **{one_day(value)}**  "
                     if value is not None
-                    else f"• {names[name]}: pending / unavailable  "
+                    else f"• {names[name]}: {unavailable_label}  "
                 )
         lines.append("")
     return "\n".join(lines).rstrip()
