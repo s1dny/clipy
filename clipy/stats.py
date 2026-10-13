@@ -1,53 +1,50 @@
-"""The stats at the top of the daily report: earnings, views and subscribers
-for every channel, on the newest day YouTube has data for and over the 30
-days up to it."""
+"""Daily status totals from fresh channel-level Studio readings."""
 
 import logging
 from datetime import UTC, date, datetime, timedelta
 
-from .analytics import _query
 from .channel import Channel, all_channels
+from .common import read_json_file
 from .upload import YouTubeAuthError
 
 logger = logging.getLogger(__name__)
 
 WINDOW = 30
-CHANNEL_LABELS = {"blow": "JBlow", "science": "Science", "philosophy": "Philosophy"}
+CHANNEL_LABELS = {
+    "blow": "JBlow",
+    "science": "Science",
+    "philosophy": "Philosophy",
+    "hotz": "Hotz",
+}
 
 
 def _daily(channel: Channel) -> dict[str, dict]:
-    end = datetime.now(UTC).date()
-    rows = _query(
-        channel,
-        metrics="views,subscribersGained,subscribersLost",
-        dimensions="day",
-        sort="day",
-        startDate=(end - timedelta(days=2 * WINDOW + 10)).isoformat(),
-        endDate=end.isoformat(),
-    )
-    daily = {
-        row["day"]: {
-            "views": row["views"],
-            "subscribers": row["subscribersGained"] - row["subscribersLost"],
+    if not channel.token_file.exists():
+        raise YouTubeAuthError("Channel needs YouTube authorization")
+    path = channel.dir / "studio-channel.json"
+    if not path.exists():
+        raise ValueError("channel totals not collected yet")
+    reading = read_json_file(path)
+    observed = datetime.fromisoformat(reading["observed_at"])
+    if observed.tzinfo is None or not timedelta(0) <= datetime.now(
+        UTC
+    ) - observed <= timedelta(hours=2):
+        raise ValueError("Studio channel totals are over two hours old")
+    if reading.get("currency") != "USD":
+        raise ValueError("Studio revenue currency is unverified")
+    return {
+        day: {
+            "views": metrics.get("views"),
+            "subscribers": metrics.get("subscribers"),
+            "earnings": metrics.get("revenue_usd"),
         }
-        for row in rows
+        for day, metrics in reading["daily"].items()
     }
-    revenue = _query(
-        channel,
-        metrics="estimatedRevenue",
-        dimensions="day",
-        sort="day",
-        startDate=(end - timedelta(days=2 * WINDOW + 10)).isoformat(),
-        endDate=end.isoformat(),
-    )
-    for row in revenue:
-        daily.setdefault(row["day"], {})["earnings"] = row["estimatedRevenue"]
-    return daily
 
 
 def _total(daily: dict[str, dict], metric: str, first: date, last: date) -> float:
     return sum(
-        values.get(metric, 0)
+        (values.get(metric) or 0)
         for day, values in daily.items()
         if first.isoformat() <= day <= last.isoformat()
     )
@@ -104,9 +101,11 @@ def report() -> str:
         except Exception as exc:
             logger.exception("Analytics unavailable for %s", channel.name)
             unavailable[channel.name] = (
-                f"analytics request failed ({type(exc).__name__})"
+                str(exc)
+                if isinstance(exc, ValueError)
+                else f"Studio totals unavailable ({type(exc).__name__})"
             )
-    # The newest day every channel with data has reached (about 3 days ago).
+    # Studio supplies recent engagement; processing revenue stays unavailable.
     latest = [max(d) for d in daily.values() if d]
     if not latest:
         return "Analytics unavailable.\n" + "\n".join(
@@ -115,14 +114,18 @@ def report() -> str:
     day = date.fromisoformat(min(latest))
     label = f"{day:%a} {day.day} {day:%b}"
 
-    lines = [label + "  "]
+    lines = [
+        label + "  ",
+        "YouTube Studio estimates · refreshed within 2 hours · YouTube reporting dates  ",
+        "",
+    ]
     if unavailable:
         lines += ["Totals include available channels only.  ", ""]
     for metric, heading, one_day, window in SECTIONS:
         metric_days = [
-            max(d for d, values in data.items() if metric in values)
+            max(d for d, values in data.items() if values.get(metric) is not None)
             for data in daily.values()
-            if any(metric in values for values in data.values())
+            if any(values.get(metric) is not None for values in data.values())
         ]
         if not metric_days:
             lines.append(f"{heading}: unavailable  ")
@@ -132,12 +135,14 @@ def report() -> str:
         freshness = f" (through {metric_day.isoformat()})" if metric_day != day else ""
         rows = {
             name: (
-                daily[name].get(metric_day.isoformat(), {}).get(metric, 0),
+                daily[name].get(metric_day.isoformat(), {}).get(metric),
                 _total(daily[name], metric, *metric_window),
             )
             for name in daily
         }
-        on_day, total = (sum(r[i] for r in rows.values()) for i in range(2))
+        on_day, total = (
+            sum(r[i] for r in rows.values() if r[i] is not None) for i in range(2)
+        )
         lines.append(
             f"{heading}{freshness}: **{one_day(on_day)}** "
             f"(Last {WINDOW} days: **{window(total)}**)  "
@@ -147,6 +152,11 @@ def report() -> str:
             if name in unavailable:
                 lines.append(f"• {names[name]}: unavailable ({unavailable[name]})  ")
             else:
-                lines.append(f"• {names[name]}: **{one_day(rows[name][0])}**  ")
+                value = rows[name][0]
+                lines.append(
+                    f"• {names[name]}: **{one_day(value)}**  "
+                    if value is not None
+                    else f"• {names[name]}: pending / unavailable  "
+                )
         lines.append("")
     return "\n".join(lines).rstrip()

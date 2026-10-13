@@ -53,3 +53,46 @@ category_id = "28"
 [channels.ideas]
 handle = "@IdeasClips"
 category_id = "27"
+
+[channels.hotz]
+handle = "@georgehotzclips"
+speaker = "George Hotz"
+thumbnail_template = "hotz.jpg"
+category_id = "28"
+
+description_template = """
+{clip_description}
+
+Clip from George Hotz
+Original: {original_url}
+Twitch: https://www.twitch.tv/georgehotz
+
+#georgehotz #programming #ai #tinygrad
+"""
+
+clip_extraction_prompt_template = """
+This is a transcript of an original long-form video featuring George Hotz, the programmer and hacker behind comma.ai and tinygrad.
+
+Find strong standalone clips about AI, machine learning, programming, GPUs, software performance, hacking, self-driving technology, or building a technology company. Prefer one clear argument, a concrete explanation, or a demonstration that makes sense without the preceding stream. Skip unrelated politics, personal tangents, small talk, sponsorships, silent coding and debugging that requires extensive context.
+
+Rules:
+- George Hotz must be the main speaker throughout each clip. Skip segments dominated by hosts or other guests.
+- Each clip covers one topic with a clear beginning and a natural end. Never cut mid-sentence or misrepresent an argument.
+- STRICT MINIMUM 8 minutes, STRICT MAXIMUM 20 minutes; aim for 10-14 minutes. Do not pad weak material.
+- Clips must not overlap. Score each 1-10 for standalone watch-time potential.
+- Titles start with "George Hotz on" and name one concrete subject or supported claim, ideally under 65 characters. Never invent a claim or imply an old opinion is current.
+
+Return JSON in this exact format:
+{
+  "clips": [
+    {
+      "title": "George Hotz on [short concrete subject]",
+      "description": "Two or three accurate sentences explaining the argument and technologies discussed.",
+      "start_ms": 12345,
+      "end_ms": 67890,
+      "score": 8,
+      "thumbnail_prompt": "One simple bold object, symbol or scene representing the central idea. No names, faces or style instructions."
+    }
+  ]
+}
+"""

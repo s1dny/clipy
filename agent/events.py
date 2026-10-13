@@ -85,8 +85,7 @@ def duration(seconds: int) -> str:
 def footer(log: str, seconds: int) -> int:
     with open(log, encoding="utf-8") as file:
         all_events = list(events(file))
-    usage = {"input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0}
-    usage["reasoning_output_tokens"] = 0
+    usage = {"input_tokens": 0, "output_tokens": 0}
     for event in all_events:
         for key in usage:
             usage[key] += (event.get("usage") or {}).get(key, 0)
@@ -99,9 +98,9 @@ def footer(log: str, seconds: int) -> int:
     )
     print(
         f"Run: {duration(seconds)} · "
-        f"{usage['input_tokens']:,} input tokens ({usage['cached_input_tokens']:,} cached) · "
+        f"{usage['input_tokens']:,} input tokens · "
         f"{usage['output_tokens']:,} output tokens "
-        f"({usage['reasoning_output_tokens']:,} reasoning) · "
+        f"· "
         f"{calls} tool call{'' if calls == 1 else 's'}"
     )
     failed = any(e["type"] == "turn.failed" for e in all_events)

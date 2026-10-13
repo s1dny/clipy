@@ -7,7 +7,7 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from http.server import ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
@@ -108,11 +108,20 @@ class Metrics(YouTube):
         if urlsplit(self.path).path != "/youtubei/v1/yta_web/get_cards":
             return super().do_POST()
         query = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-        assert query["screenConfig"]["entity"] == {"videoId": "owned-video"}
-        assert (
-            query["screenConfig"]["timePeriod"]["timePeriodType"]
-            == "ANALYTICS_TIME_PERIOD_TYPE_SINCE_PUBLISH"
-        )
+        channel_totals = query["screenConfig"]["entity"] == {
+            "channelId": "channel-owned"
+        }
+        if channel_totals:
+            date_range = query["screenConfig"]["timePeriod"]["dateIdRange"]
+            first = date.fromisoformat(str(date_range["inclusiveStart"]))
+            last = date.fromisoformat(str(date_range["exclusiveEnd"]))
+            assert (last - first).days == 70
+        else:
+            assert query["screenConfig"]["entity"] == {"videoId": "owned-video"}
+            assert (
+                query["screenConfig"]["timePeriod"]["timePeriodType"]
+                == "ANALYTICS_TIME_PERIOD_TYPE_SINCE_PUBLISH"
+            )
         assert query["screenConfig"]["currency"] == "USD"
         assert (
             query["context"]["user"]["delegationContext"]["externalChannelId"]
@@ -146,6 +155,43 @@ class Metrics(YouTube):
         channel = (
             "wrong-channel" if type(self).studio_wrong_channel else "channel-owned"
         )
+        from zoneinfo import ZoneInfo
+
+        yesterday = datetime.now(ZoneInfo("Australia/Sydney")).date() - timedelta(
+            days=1
+        )
+        stamp = int(
+            datetime.combine(
+                yesterday, datetime.min.time(), ZoneInfo("America/Los_Angeles")
+            ).timestamp()
+            * 1000
+        )
+
+        def content(metric, value):
+            body = {
+                "metric": metric,
+                "total": value,
+                "anomalies": [{"type": "ANALYTICS_ANOMALY_TYPE_DATA_ESTIMATED"}],
+            }
+            if channel_totals:
+                body["mainSeries"] = {
+                    "datums": [{"x": stamp, "y": value}],
+                    "timeUnit": "TIME_PERIOD_UNIT_DAYS",
+                }
+                if metric == "TOTAL_ESTIMATED_EARNINGS":
+                    body["mainSeries"]["datums"] = [
+                        {"x": stamp - 86400000, "y": value},
+                        {"x": stamp, "y": 0},
+                    ]
+                    body["anomalies"] = [
+                        {
+                            "impact": "ANALYTICS_ANOMALY_IMPACT_DATA_MISSING",
+                            "startDate": stamp,
+                            "endDate": stamp + 86400000,
+                        }
+                    ]
+            return body
+
         self.reply(
             {
                 "cards": [
@@ -154,15 +200,7 @@ class Metrics(YouTube):
                         "keyMetricCardData": {
                             "keyMetricTabs": [
                                 {
-                                    "primaryContent": {
-                                        "metric": metric,
-                                        "total": value,
-                                        "anomalies": [
-                                            {
-                                                "type": "ANALYTICS_ANOMALY_TYPE_DATA_ESTIMATED"
-                                            }
-                                        ],
-                                    }
+                                    "primaryContent": content(metric, value),
                                 }
                                 for metric, value in values.items()
                             ]
@@ -289,8 +327,8 @@ def test_reports_separate_fresh_engagement_revenue_and_current_counts(metric_ser
         server[0] + "/stats", headers={"Authorization": "Bearer " + TOKEN}, timeout=10
     )
     assert response.ok
-    assert f"Earnings (through {report['revenue_data_through']})" in response.text
-    assert "Views: **42**" in response.text
+    assert "Analytics unavailable" in response.text
+    assert "Views: **42**" not in response.text
 
 
 def test_studio_import_retains_provenance_and_rejects_wrong_channel(metric_server):
@@ -450,6 +488,29 @@ main()
                 "ctr_percent": 6.04,
             }
             assert reading["approximate"] and reading["period"] == "since_published"
+            header = requests.get(
+                server[0] + "/stats",
+                headers={"Authorization": "Bearer " + TOKEN},
+                timeout=10,
+            ).text
+            assert "Views: **9,401**" in header
+            assert "Subscribers: **-2**" in header
+            assert "Earnings (through " in header and "**$2.47**" in header
+            assert "YouTube Studio estimates" in header
+            path = server[1] / "channels/blow/studio-channel.json"
+            snapshot = json.loads(path.read_text())
+            assert snapshot["currency"] == "USD"
+            assert snapshot["daily"][max(snapshot["daily"])]["revenue_usd"] is None
+            snapshot["observed_at"] = (
+                datetime.now(UTC) - timedelta(hours=3)
+            ).isoformat()
+            path.write_text(json.dumps(snapshot))
+            stale = requests.get(
+                server[0] + "/stats",
+                headers={"Authorization": "Bearer " + TOKEN},
+                timeout=10,
+            ).text
+            assert "over two hours old" in stale and "Views: **9,401**" not in stale
             cookies = json.loads(session.read_text())
             assert any(
                 c["name"] == "SIDCC" and c["value"] == "rotated" and c["httpOnly"]

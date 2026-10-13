@@ -132,12 +132,7 @@ report() {
     if [ -s "$work/observer.md" ] && ! grep -q '^Run failed:' "$work/observer.md"; then
       cat "$work/observer.md"
     else
-      cat "$work/observer.md"
-      echo "Here are the channels' own summaries."; echo
-      for channel in "$@"; do
-        echo "**$channel**"; echo
-        python "$CLIPY_AGENT_DIR/events.py" final "$CLIPY_AGENT_WORK_DIR/$channel/events.jsonl"; echo
-      done
+      echo "Owner actions: could not be checked automatically (report generation failed)."
     fi
     echo; echo "---"
     for channel in "$@"; do printf '%s: %s  \n' "$channel" "$(head -n 1 "$CLIPY_AGENT_WORK_DIR/$channel/footer")"; done

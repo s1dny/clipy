@@ -98,7 +98,7 @@ if os.environ['FAKE_MODE'] == 'quota' or n == 1:
     sys.exit(1)
 emit({'type':'item.completed','item':{'type':'mcp_tool_call','server':'clipy','tool':'read_notes','status':'completed'}})
 emit({'type':'item.completed','item':{'type':'agent_message','text':'Channel run completed.'}})
-emit({'type':'turn.completed','usage':{'input_tokens':100,'output_tokens':10}})
+emit({'type':'turn.completed','usage':{'input_tokens':100,'output_tokens':10,'cached_input_tokens':80,'reasoning_output_tokens':5}})
 """
 
 
@@ -148,12 +148,12 @@ def test_daily_run_reports_failures_and_retries_only_before_tools(
     assert len(Provider.messages) == 1, result.stdout + result.stderr
     report = Provider.messages[0]
     assert report["body"].startswith("Views: **42**")
-    assert "Run failed: You have hit your usage limit." in report["body"]
+    assert "Owner actions: could not be checked automatically" in report["body"]
+    assert "cached" not in report["body"] and "reasoning" not in report["body"]
+    assert "Here are the channels" not in report["body"]
     assert "<strong>42</strong>" in report["formatted_body"]
-    if mode == "recover":
-        assert "Channel run completed." in report["body"]
-    if mode == "partial":
-        assert "Notebook updated." in report["body"]
+    assert "Channel run completed." not in report["body"]
+    assert "Notebook updated." not in report["body"]
 
 
 def test_stats_endpoint_keeps_healthy_channel_when_another_needs_login(
@@ -180,11 +180,21 @@ def test_stats_endpoint_keeps_healthy_channel_when_another_needs_login(
             }
         )
     )
-    revoked = tmp_path / "channels/blow/.youtube_token.json"
-    revoked.parent.mkdir(parents=True)
-    old = json.loads(token.read_text())
-    old["expiry"] = "2020-01-01T00:00:00Z"
-    revoked.write_text(json.dumps(old))
+    (token.parent / "studio-channel.json").write_text(
+        json.dumps(
+            {
+                "observed_at": datetime.now(UTC).isoformat(),
+                "currency": "USD",
+                "daily": {
+                    (datetime.now(UTC).date() - timedelta(days=1)).isoformat(): {
+                        "views": 42,
+                        "subscribers": 2,
+                        "revenue_usd": 1.25,
+                    }
+                },
+            }
+        )
+    )
     # Use Google's actual discovery client and HTTP requests, with only its
     # provider URL redirected to our local fake. Production has no test switch.
     launcher = """

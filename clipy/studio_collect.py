@@ -133,7 +133,7 @@ class StudioClient:
         self.configs[channel_id] = config
         return config
 
-    def _cards(self, channel_id, video_id, currency):
+    def _cards(self, channel_id, video_id, currency, start=None, end=None):
         config = self.configs.get(channel_id) or self._bootstrap(channel_id)
         cookie = self.session.cookies.get("SAPISID", domain=".youtube.com", path="/")
         if not cookie:
@@ -156,16 +156,26 @@ class StudioClient:
         context.setdefault("user", {})["delegationContext"] = config[
             "DELEGATION_CONTEXT"
         ]
-        entity = {"videoId": video_id}
+        entity = {"videoId": video_id} if video_id else {"channelId": channel_id}
+        period = (
+            {
+                "dateIdRange": {
+                    "inclusiveStart": int(start.strftime("%Y%m%d")),
+                    "exclusiveEnd": int(end.strftime("%Y%m%d")),
+                }
+            }
+            if start is not None and end is not None
+            else {
+                "referencePoint": "TIME_PERIOD_REFERENCE_POINT_SINCE_PUBLISH",
+                "timePeriodType": "ANALYTICS_TIME_PERIOD_TYPE_SINCE_PUBLISH",
+                "entity": entity,
+            }
+        )
         query = {
             "context": context,
             "screenConfig": {
                 "entity": entity,
-                "timePeriod": {
-                    "referencePoint": "TIME_PERIOD_REFERENCE_POINT_SINCE_PUBLISH",
-                    "timePeriodType": "ANALYTICS_TIME_PERIOD_TYPE_SINCE_PUBLISH",
-                    "entity": entity,
-                },
+                "timePeriod": period,
                 "currency": currency,
                 "timeZoneOffsetSecs": int(
                     datetime.now(ZoneInfo("Australia/Sydney"))
@@ -201,6 +211,7 @@ class StudioClient:
         if "error" in payload:
             raise ValueError("Studio analytics request failed")
         values = {}
+        daily = {}
         estimated = False
         for card in payload.get("cards", []):
             if (
@@ -215,23 +226,52 @@ class StudioClient:
                     name, divisor = METRICS[metric]
                     total = content.get("total")
                     values[name] = total / divisor if total is not None else None
-                    estimated |= bool(content.get("anomalies"))
+                    anomalies = content.get("anomalies", [])
+                    estimated |= bool(anomalies)
+                    if start is not None:
+                        for datum in content.get("mainSeries", {}).get("datums", []):
+                            stamp = datum["x"]
+                            day = (
+                                datetime.fromtimestamp(
+                                    stamp / 1000, ZoneInfo("America/Los_Angeles")
+                                )
+                                .date()
+                                .isoformat()
+                            )
+                            missing = any(
+                                anomaly.get("impact")
+                                == "ANALYTICS_ANOMALY_IMPACT_DATA_MISSING"
+                                and anomaly.get("startDate", float("-inf"))
+                                <= stamp
+                                < anomaly.get("endDate", float("inf"))
+                                for anomaly in anomalies
+                            )
+                            value = datum.get("y")
+                            daily.setdefault(day, {})[name] = (
+                                value / divisor
+                                if value is not None and not missing
+                                else None
+                            )
+        if start is not None:
+            if not daily:
+                raise ValueError("Studio returned no channel daily series")
+            return daily, estimated
         if not values:
             raise ValueError("Studio returned no metric totals")
         return {name: values.get(name) for name, _ in METRICS.values()}, estimated
 
-    def readings(self, channel_id, video_id, currency="USD"):
+    def readings(self, channel_id, video_id, currency="USD", *, start=None, end=None):
         try:
-            return self._cards(channel_id, video_id, currency)
+            return self._cards(channel_id, video_id, currency, start, end)
         except StudioAuthRequired:
             # Refresh client variables and cookie state once. A revoked Google
             # login is reported, never disguised as a zero-valued reading.
             self.configs.pop(channel_id, None)
             try:
-                return self._cards(channel_id, video_id, currency)
+                return self._cards(channel_id, video_id, currency, start, end)
             except StudioAuthRequired:
                 self._recover_browser_login()
-                return self._cards(channel_id, video_id, currency)
+                return self._cards(channel_id, video_id, currency, start, end)
 
     def checkpoint(self):
         path = _session_path()
@@ -284,6 +324,37 @@ def collect(channel: Channel, client: StudioClient) -> dict:
             v for v in dict.fromkeys([*reversed(active), *targets]) if v in known
         ][:10]
     saved, errors = 0, []
+    try:
+        end = datetime.now(ZoneInfo("Australia/Sydney")).date()
+        start = end - timedelta(days=70)
+        daily, approximate = client.readings(channel_id, None, start=start, end=end)
+        write_json_file(
+            channel.dir / "studio-channel.json",
+            {
+                "channel_id": channel_id,
+                "observed_at": datetime.now(UTC).isoformat(),
+                "source": "YouTube Studio internal analytics API",
+                "currency": "USD",
+                "reporting_timezone": "America/Los_Angeles",
+                "start_date": start.isoformat(),
+                "end_date_exclusive": end.isoformat(),
+                "approximate": approximate,
+                "daily": daily,
+            },
+        )
+        client.checkpoint()
+    except Exception as exc:  # noqa: BLE001 - video collection can still proceed
+        logger.warning(
+            "Studio channel totals unavailable for %s: %s",
+            channel.name,
+            type(exc).__name__,
+        )
+        error = {"scope": "channel_totals", "error": type(exc).__name__}
+        if isinstance(exc, StudioAuthRequired):
+            error["action"] = (
+                "Sign into the server browser; Google requires authentication or channel access."
+            )
+        errors.append(error)
     for video_id in targets:
         try:
             metrics, approximate = client.readings(channel_id, video_id)
