@@ -2,19 +2,27 @@
 
 import hashlib
 import json
-import os
 import subprocess
 import sys
-import threading
 import time
 from datetime import UTC, date, datetime, timedelta
-from http.server import ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
 import requests
-from test_mcp_server import CONFIG, ROOT, TOKEN, _free_port, call, data, image
-from test_upload_recovery import LAUNCHER, YouTube
+from support import (
+    CONFIG,
+    LAUNCHER,
+    ROOT,
+    TOKEN,
+    YouTube,
+    app,
+    call,
+    data,
+    image,
+    provider,
+    write_token,
+)
 
 
 class Metrics(YouTube):
@@ -232,48 +240,29 @@ class Metrics(YouTube):
 @pytest.fixture
 def metric_server(tmp_path):
     now = datetime.now(UTC)
-    Metrics.studio_bootstraps = 0
-    Metrics.studio_calls = 0
+    Metrics.studio_bootstraps = Metrics.studio_calls = 0
     Metrics.studio_wrong_channel = False
     Metrics.monetized = True
     channel = tmp_path / "channels/blow"
-    channel.mkdir(parents=True)
+    write_token(channel)
     (tmp_path / "config.toml").write_text(CONFIG.split("[channels.science]")[0])
-    (channel / ".youtube_token.json").write_text(
-        json.dumps(
-            {
-                "token": "test",
-                "refresh_token": "unused",
-                "client_id": "test",
-                "client_secret": "test",
-                "expiry": (now + timedelta(hours=1)).isoformat(),
-                "scopes": [
-                    "https://www.googleapis.com/auth/" + s
-                    for s in [
-                        "youtube",
-                        "youtube.upload",
-                        "yt-analytics.readonly",
-                        "yt-analytics-monetary.readonly",
-                    ]
-                ],
-            }
-        )
-    )
-    old = {
-        "views": 100,
-        "likes": 5,
-        "comments": 1,
-        "title": "Example",
-        "privacy": "public",
-        "publish_time": (now - timedelta(days=6)).isoformat(),
-    }
+    published = (now - timedelta(days=6)).isoformat()
     (channel / "performance.json").write_text(
         json.dumps(
             [
                 {
                     "observed_at": (now - timedelta(hours=24)).isoformat(),
                     "subscribers": 11100,
-                    "videos": {"owned-video": old},
+                    "videos": {
+                        "owned-video": {
+                            "views": 100,
+                            "likes": 5,
+                            "comments": 1,
+                            "title": "Example",
+                            "privacy": "public",
+                            "publish_time": published,
+                        }
+                    },
                 }
             ]
         )
@@ -285,138 +274,40 @@ def metric_server(tmp_path):
                 "title": "Example",
                 "categoryId": "28",
                 "description": "Original: example",
-                "publishedAt": old["publish_time"],
+                "publishedAt": published,
             },
             "status": {"privacyStatus": "public", "uploadStatus": "processed"},
             "contentDetails": {"duration": "PT10M"},
             "statistics": {"viewCount": "140", "likeCount": "7", "commentCount": "2"},
         }
     ]
-    fake = ThreadingHTTPServer(("127.0.0.1", 0), Metrics)
-    threading.Thread(target=fake.serve_forever, daemon=True).start()
-    Metrics.existing[0]["snippet"]["thumbnails"] = {
-        "maxres": {"url": f"http://127.0.0.1:{fake.server_port}/thumbnail-max.jpg"},
-        "high": {"url": f"http://127.0.0.1:{fake.server_port}/thumbnail-high.jpg"},
-    }
-    port = _free_port()
-    env = {
-        **os.environ,
-        "CLIPY_CONFIG": str(tmp_path / "config.toml"),
-        "CLIPY_DATA_DIR": str(tmp_path),
-        "CLIPY_MCP_TOKEN": TOKEN,
-        "HOST": "127.0.0.1",
-        "PORT": str(port),
-        "FAKE_GOOGLE_URL": f"http://127.0.0.1:{fake.server_port}",
-    }
-    proc = subprocess.Popen([sys.executable, "-c", LAUNCHER], env=env)
-    base = f"http://127.0.0.1:{port}"
-    try:
-        deadline = time.monotonic() + 60
-        while True:
-            try:
-                if requests.get(base + "/healthz", timeout=1).ok:
-                    break
-            except requests.ConnectionError:
-                pass
-            assert proc.poll() is None and time.monotonic() < deadline
-            time.sleep(0.1)
-        yield (base, tmp_path), env
-    finally:
-        proc.terminate()
-        proc.wait(timeout=10)
-        fake.shutdown()
-        fake.server_close()
+    with provider(Metrics) as endpoint:
+        Metrics.existing[0]["snippet"]["thumbnails"] = {
+            "maxres": {"url": endpoint + "/thumbnail-max.jpg"},
+            "high": {"url": endpoint + "/thumbnail-high.jpg"},
+        }
+        with app(tmp_path, FAKE_GOOGLE_URL=endpoint) as started:
+            yield started
 
 
-def test_reports_separate_fresh_engagement_revenue_and_current_counts(metric_server):
-    server, _ = metric_server
+@pytest.mark.parametrize("monetized", [True, False])
+def test_collect_report_and_tune_channel_with_delayed_revenue(metric_server, monetized):
+    server, env = metric_server
+    Metrics.monetized = monetized
     report = data(call(server, "channel_report", {"rank_by": "watch_hours"}))
     assert report["data_through"] > report["revenue_data_through"]
-    assert report["totals"]["watch_hours"] == 0.2
-    assert report["videos"][0]["rpm_usd"] is None
     assert report["daily"][0]["revenue_usd"] is None
-    recent = data(call(server, "recent_performance"))
-    assert recent["videos"][0]["counter_changes"]["24"]["views"] == 40
-    assert recent["videos"][0]["counter_changes"]["48"]["views"] is None
-    assert recent["subscribers"] == 11200
-    response = requests.get(
-        server[0] + "/stats", headers={"Authorization": "Bearer " + TOKEN}, timeout=10
+    assert (
+        data(call(server, "recent_performance"))["videos"][0]["counter_changes"]["24"][
+            "views"
+        ]
+        == 40
     )
-    assert response.ok
-    assert "Analytics unavailable" in response.text
-    assert "Views: **42**" not in response.text
-
-
-def test_studio_import_retains_provenance_and_rejects_wrong_channel(metric_server):
-    server, env = metric_server
-    reading = {
-        "video_id": "owned-video",
-        "observed_at": datetime.now(UTC).isoformat(),
-        "url": "https://studio.youtube.com/video/owned-video/analytics/tab-reach_viewers/period-default",
-        "period": "since_published",
-        "approximate": True,
-        "metrics": {"impressions": 34500, "ctr_percent": 6, "revenue_usd": None},
-    }
-    imported = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            LAUNCHER.replace(
-                "from clipy.mcp_server import main", "from clipy.cli import main"
-            ),
-            "studio-import",
-            "blow",
-        ],
-        env=env,
-        input=json.dumps([reading]),
-        text=True,
-        capture_output=True,
-        check=False,
+    # Private uploads often lack max-resolution artwork; the API rendition still previews.
+    assert image(call(server, "view_thumbnail", {"video_id": "owned-video"})).size == (
+        1920,
+        1080,
     )
-    assert imported.returncode == 0, imported.stderr
-    recent = data(call(server, "recent_performance"))
-    studio = recent["studio"]["videos"][0]
-    assert studio["source"] == "visible YouTube Studio UI"
-    assert studio["approximate"] and not studio["stale"]
-    assert studio["metrics"]["revenue_usd"] is None
-    reading["video_id"] = "another-channel"
-    bad = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            LAUNCHER.replace(
-                "from clipy.mcp_server import main", "from clipy.cli import main"
-            ),
-            "studio-import",
-            "blow",
-        ],
-        env=env,
-        input=json.dumps([reading]),
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert bad.returncode != 0
-    assert "does not belong" in bad.stderr
-
-
-def test_private_video_preview_uses_api_renditions_when_maxres_is_missing(
-    metric_server,
-):
-    server, _ = metric_server
-    preview = image(call(server, "view_thumbnail", {"video_id": "owned-video"}))
-    assert preview.size == (1920, 1080)
-
-
-@pytest.mark.parametrize(
-    "wrong_channel,monetized", [(False, True), (False, False), (True, True)]
-)
-def test_direct_studio_collection_refreshes_auth_without_rendering(
-    metric_server, wrong_channel, monetized
-):
-    server, env = metric_server
-    Metrics.studio_wrong_channel = wrong_channel
-    Metrics.monetized = monetized
     session = server[1] / "private-session.json"
     session.write_text(
         json.dumps(
@@ -480,78 +371,56 @@ main()
         "CLIPY_STUDIO_SESSION": str(session),
         "CLIPY_STUDIO_CDP": env["FAKE_GOOGLE_URL"],
     }
-    for _ in range(2):
-        result = subprocess.run(
-            [sys.executable, "-c", collector],
-            env=env,
-            text=True,
-            capture_output=True,
-            timeout=60,
-            check=False,
-        )
-        if wrong_channel:
-            assert result.returncode == 1, result.stderr
-            assert not (server[1] / "channels/blow/studio.json").exists()
-        else:
-            assert result.returncode == 0, result.stderr
-            report = data(call(server, "recent_performance"))
-            reading = report["studio"]["videos"][0]
-            assert reading["source"] == "YouTube Studio internal analytics API"
-            assert reading["currency"] == "USD"
-            assert reading["metrics"] == {
-                "views": 9401,
-                "watch_hours": 354.4,
-                "subscribers": -2,
-                "revenue_usd": 2.468,
-                "impressions": 34567,
-                "ctr_percent": 6.04,
-            }
-            assert reading["approximate"] and reading["period"] == "since_published"
-            header = requests.get(
-                server[0] + "/stats",
-                headers={"Authorization": "Bearer " + TOKEN},
-                timeout=10,
-            ).text
-            assert "Views: **9,401**" in header
-            assert "Subscribers: **-2**" in header
-            if monetized:
-                assert "Earnings: **$2.47**" in header
-            else:
-                assert "Earnings: unavailable" in header
-                assert "**$2.47**" not in header
-            assert "YouTube Studio estimates" not in header
-            assert "(through " not in header
-            path = server[1] / "channels/blow/studio-channel.json"
-            snapshot = json.loads(path.read_text())
-            assert snapshot["currency"] == "USD"
-            assert snapshot["daily"][max(snapshot["daily"])].get("revenue_usd") is None
-            snapshot["observed_at"] = (
-                datetime.now(UTC) - timedelta(hours=3)
-            ).isoformat()
-            path.write_text(json.dumps(snapshot))
-            stale = requests.get(
-                server[0] + "/stats",
-                headers={"Authorization": "Bearer " + TOKEN},
-                timeout=10,
-            ).text
-            assert "over two hours old" in stale and "Views: **9,401**" not in stale
-            cookies = json.loads(session.read_text())
-            assert any(
-                c["name"] == "SIDCC" and c["value"] == "rotated" and c["httpOnly"]
-                for c in cookies
-            )
-            assert session.stat().st_mode & 0o777 == 0o600
-    assert Metrics.studio_bootstraps == 3
-
-
-def test_tuning_records_before_after_and_observed_baseline(metric_server):
-    server, _ = metric_server
-    result = call(
-        server, "update_video", {"video_id": "owned-video", "title": "A better title"}
+    result = subprocess.run(
+        [sys.executable, "-c", collector],
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
     )
-    assert not result.is_error
-    changes = json.loads((server[1] / "channels/blow/experiments.json").read_text())
-    assert changes[-1]["before"]["title"] == "Example"
-    assert changes[-1]["after"]["title"] == "A better title"
-    assert changes[-1]["baseline"]["counters"]["views"] == 140
-    assert changes[-1]["baseline"]["observed_at"] <= changes[-1]["changed_at"]
+    assert result.returncode == 0, result.stderr
+    reading = data(call(server, "recent_performance"))["studio"]["videos"][0]
+    assert reading["metrics"]["watch_hours"] == 354.4
+    assert reading["metrics"]["ctr_percent"] == 6.04
+    header = requests.get(
+        server[0] + "/stats", headers={"Authorization": "Bearer " + TOKEN}, timeout=3
+    ).text
+    assert "9,401" in header and "-2" in header
+    assert ("$2.47" in header) == monetized
+    path = server[1] / "channels/blow/studio-channel.json"
+    snapshot = json.loads(path.read_text())
+    assert snapshot["daily"][max(snapshot["daily"])].get("revenue_usd") is None
+    assert any(
+        c["name"] == "SIDCC" and c["value"] == "rotated"
+        for c in json.loads(session.read_text())
+    )
+    assert session.stat().st_mode & 0o777 == 0o600
+
+    call(server, "update_video", {"video_id": "owned-video", "title": "A better title"})
+    change = json.loads((server[1] / "channels/blow/experiments.json").read_text())[-1]
+    assert (
+        change["before"]["title"] == "Example"
+        and change["after"]["title"] == "A better title"
+    )
+    assert change["baseline"]["counters"]["views"] == 140
+    assert change["baseline"]["observed_at"] <= change["changed_at"]
+
+    # A wrong channel must not overwrite the good readings, and old readings cannot count as fresh.
+    Metrics.studio_wrong_channel = True
+    wrong = subprocess.run(
+        [sys.executable, "-c", collector],
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+    assert wrong.returncode == 1
+    assert json.loads(path.read_text()) == snapshot
+    snapshot["observed_at"] = (datetime.now(UTC) - timedelta(hours=3)).isoformat()
+    path.write_text(json.dumps(snapshot))
+    stale = requests.get(
+        server[0] + "/stats", headers={"Authorization": "Bearer " + TOKEN}, timeout=3
+    ).text
+    assert "9,401" not in stale

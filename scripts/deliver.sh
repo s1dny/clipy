@@ -28,7 +28,7 @@ budget build-check-image
 docker build --target ci --tag "$ci_image" .
 budget full-e2e
 docker run --rm --cpus=4 --memory=4g --shm-size=512m "$ci_image" \
-  sh -c 'ruff format --check . && ruff check . && pytest -n 4 --dist loadgroup -q --durations=10 tests'
+  timeout 60s sh -c 'ruff format --check . && ruff check . && pytest -n 4 --dist loadgroup -q --durations=10 tests'
 if [[ ${GITHUB_EVENT_NAME:-} == pull_request ]]; then exit 0; fi
 budget build-runtime
 docker build --target runtime --build-arg "CLIPY_REVISION=$revision" --tag "$image" .

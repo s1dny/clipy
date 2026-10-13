@@ -28,6 +28,10 @@ clipy-mcp = "clipy.mcp_server:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.pytest.ini_options]
+addopts = "-n 4 --dist loadgroup"
+testpaths = ["tests"]
+
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",

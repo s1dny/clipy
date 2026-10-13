@@ -277,8 +277,11 @@ clipy process <channel> <youtube-url> [--speaker "Full Name"]
 uv run ruff format .
 uv run ruff check .
 uv run playwright install chromium
-uv run pytest tests
+uv run pytest
 ```
 
-The tests start the MCP server and use it end to end, and cut real video with
-ffmpeg.
+The suite runs complete CLI, MCP and browser workflows against local HTTP
+providers, with real ffmpeg exports and persisted queues. It covers source
+resume, channel isolation, interrupted uploads, private-upload repair,
+analytics collection, comment recovery, daily-agent retries and rollout
+readiness. Pytest uses four workers by default; CI enforces a 60-second limit.

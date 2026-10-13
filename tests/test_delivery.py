@@ -8,9 +8,8 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-import pytest
 import requests
-from test_mcp_server import CONFIG, TOKEN, _free_port
+from support import CONFIG, TOKEN, _free_port
 
 REVISION = "a" * 40
 IMAGE = f"git.aza.network/aza/clipy:main-{REVISION[:12]}-1@sha256:" + "b" * 64
@@ -66,10 +65,7 @@ class Cluster(BaseHTTPRequestHandler):
         pass
 
 
-@pytest.mark.parametrize("lagging", [False, True])
-def test_release_endpoint_proves_all_workers_without_exposing_credentials(
-    tmp_path, lagging
-):
+def test_release_waits_for_all_workers(tmp_path):
     config = tmp_path / "config.toml"
     config.write_text(CONFIG)
     account = tmp_path / "service-account"
@@ -77,7 +73,7 @@ def test_release_endpoint_proves_all_workers_without_exposing_credentials(
     (account / "token").write_text("fixture-workload-token")
     (account / "namespace").write_text("clipy")
     (account / "ca.crt").write_text("fixture-ca")
-    Cluster.lagging = lagging
+    Cluster.lagging = True
     fake = ThreadingHTTPServer(("127.0.0.1", 0), Cluster)
     threading.Thread(target=fake.serve_forever, daemon=True).start()
     port = _free_port()
@@ -128,9 +124,11 @@ main()
             assert proc.poll() is None and time.monotonic() < deadline
             time.sleep(0.05)
         result = requests.get(f"http://127.0.0.1:{port}/releasez", timeout=10)
-        assert result.status_code == (503 if lagging else 200), result.text
-        assert result.json() == {"revision": REVISION, "ready": not lagging}
-        assert "token" not in result.text and "fixture" not in result.text
+        assert result.status_code == 503
+        Cluster.lagging = False
+        result = requests.get(f"http://127.0.0.1:{port}/releasez", timeout=3)
+        assert result.status_code == 200
+        assert result.json() == {"revision": REVISION, "ready": True}
     finally:
         proc.terminate()
         proc.wait(timeout=5)

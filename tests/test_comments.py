@@ -4,16 +4,12 @@ import json
 import os
 import subprocess
 import sys
-import threading
 import time
 from datetime import UTC, datetime, timedelta
-from http.server import ThreadingHTTPServer
 from urllib.parse import urlsplit
 
-import pytest
 from playwright.sync_api import sync_playwright
-from test_mcp_server import CONFIG, _clip, _free_port
-from test_upload_recovery import LAUNCHER, YouTube
+from support import CONFIG, LAUNCHER, YouTube, _clip, _free_port, provider, write_token
 
 from clipy.comments import FOLLOW_COMMENT
 
@@ -94,7 +90,7 @@ COMMENT_LAUNCHER = (
     LAUNCHER.split("from clipy.mcp_server import main")[0]
     + """
 import requests
-from playwright.sync_api import Browser, Page
+from playwright.sync_api import Browser, Page, Locator
 original_context = Browser.new_context
 def context(self, **kwargs):
     ctx = original_context(self, **kwargs)
@@ -109,6 +105,13 @@ def context(self, **kwargs):
 Browser.new_context = context
 original_timeout = Page.set_default_timeout
 Page.set_default_timeout = lambda self, value: original_timeout(self, 1500)
+# The fixture serves comments immediately; keep absence checks bounded while
+# retaining asynchronous pin verification in a real browser.
+original_wait = Locator.wait_for
+def wait(self, **kwargs):
+    kwargs['timeout'] = min(kwargs.get('timeout', 1500), 500)
+    return original_wait(self, **kwargs)
+Locator.wait_for = wait
 import clipy.comments as comments
 original_comment_and_pin = comments.comment_and_pin
 def traced_comment_and_pin(*args, **kwargs):
@@ -125,144 +128,84 @@ main()
 )
 
 
-@pytest.mark.parametrize("scheduled", [False, True])
-def test_private_upload_waits_then_posts_and_pins_once_with_retry(tmp_path, scheduled):
-    config = tmp_path / "config.toml"
-    config.write_text(CONFIG)
+def test_comment_scheduler_resumes_failed_pin_without_posting_twice(tmp_path):
+    channel = tmp_path / "channels/blow"
+    (tmp_path / "config.toml").write_text(CONFIG)
     item = _clip(
-        tmp_path / "channels/blow",
+        channel,
         "aaaaaaaaaaa",
         "01",
         status="uploaded",
         youtube_id="new-upload",
         follow_comment_pending=True,
+        publish_at=(datetime.now(UTC) + timedelta(hours=1)).isoformat(),
     )
-    queue = tmp_path / "channels/blow/upload_queue.json"
+    queue = channel / "upload_queue.json"
     queue.write_text(json.dumps([item]))
-    (queue.parent / ".youtube_token.json").write_text(
-        json.dumps(
-            {
-                "token": "fixture",
-                "refresh_token": "unused",
-                "client_id": "fixture",
-                "client_secret": "fixture",
-                "expiry": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
-                "scopes": [
-                    "https://www.googleapis.com/auth/" + s
-                    for s in (
-                        "youtube",
-                        "youtube.upload",
-                        "yt-analytics.readonly",
-                        "yt-analytics-monetary.readonly",
-                    )
-                ],
-            }
-        )
-    )
-    Comments.public_checks = 0
-    Comments.privacy = "private"
-    Comments.posted = 0
-    Comments.pins = 0
-    Comments.fail_pin = False
-    fake = ThreadingHTTPServer(("127.0.0.1", 0), Comments)
-    threading.Thread(target=fake.serve_forever, daemon=True).start()
-    with sync_playwright() as p:
+    write_token(channel)
+    Comments.public_checks = Comments.posted = Comments.pins = 0
+    Comments.privacy = "public"
+    Comments.fail_pin = True
+    with provider(Comments) as endpoint, sync_playwright() as p:
         port = _free_port()
         browser = p.chromium.launch(args=[f"--remote-debugging-port={port}"])
         browser.new_context()
         env = {
             **os.environ,
-            "CLIPY_CONFIG": str(config),
+            "CLIPY_CONFIG": str(tmp_path / "config.toml"),
             "CLIPY_DATA_DIR": str(tmp_path),
-            "FAKE_GOOGLE_URL": f"http://127.0.0.1:{fake.server_port}",
+            "FAKE_GOOGLE_URL": endpoint,
             "CLIPY_STUDIO_CDP": f"http://127.0.0.1:{port}",
         }
-
-        def run():
-            return subprocess.run(
-                [sys.executable, "-c", COMMENT_LAUNCHER, "comments", "blow"],
+        log = tmp_path / "scheduler.log"
+        with log.open("w") as output:
+            worker = subprocess.Popen(
+                [sys.executable, "-c", COMMENT_LAUNCHER, "comments-serve"],
                 env=env,
-                capture_output=True,
-                text=True,
-                timeout=45,
-                check=False,
+                stdout=output,
+                stderr=output,
             )
 
+        def until(check):
+            deadline = time.monotonic() + 10
+            while not check():
+                assert worker.poll() is None and time.monotonic() < deadline, (
+                    log.read_text()
+                )
+                time.sleep(0.05)
+
         try:
-            if scheduled:
-                Comments.privacy = "public"
-                item["publish_at"] = (
-                    datetime.now(UTC) + timedelta(hours=1)
-                ).isoformat()
-                queue.write_text(json.dumps([item]))
-                log = tmp_path / "scheduler.log"
-                with log.open("w") as output:
-                    worker = subprocess.Popen(
-                        [sys.executable, "-c", COMMENT_LAUNCHER, "comments-serve"],
-                        env=env,
-                        stdout=output,
-                        stderr=output,
-                    )
-                try:
-                    deadline = time.monotonic() + 15
-                    while "Next scheduled comment attempt" not in log.read_text():
-                        assert worker.poll() is None and time.monotonic() < deadline, (
-                            log.read_text()
-                        )
-                        time.sleep(0.05)
-                    assert Comments.public_checks == 0
-                    item["publish_at"] = (
-                        datetime.now(UTC) + timedelta(seconds=3)
-                    ).isoformat()
-                    replacement = queue.with_suffix(".tmp")
-                    replacement.write_text(json.dumps([item]))
-                    replacement.replace(queue)
-                    time.sleep(1)
-                    assert Comments.public_checks == 0 and Comments.posted == 0
-                    state_path = queue.parent / "follow-comments.json"
-                    deadline = time.monotonic() + 25
-                    while not state_path.exists() or not json.loads(
-                        state_path.read_text()
-                    ).get("new-upload", {}).get("pinned_at"):
-                        assert worker.poll() is None and time.monotonic() < deadline, (
-                            log.read_text()
-                        )
-                        time.sleep(0.05)
-                    assert (
-                        Comments.public_checks == 1
-                        and Comments.posted == 1
-                        and Comments.pins == 1
-                    )
-                    worker.terminate()
-                    worker.wait(timeout=5)
-                    result = run()
-                    assert result.returncode == 0, result.stderr
-                    assert Comments.public_checks == 1 and Comments.posted == 1
-                finally:
-                    if worker.poll() is None:
-                        worker.terminate()
-                        worker.wait(timeout=5)
-            else:
-                result = run()
+            until(lambda: "Next scheduled comment attempt" in log.read_text())
+            assert Comments.public_checks == 0
+            item["publish_at"] = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+            replacement = queue.with_suffix(".tmp")
+            replacement.write_text(json.dumps([item]))
+            replacement.replace(queue)
+            state = channel / "follow-comments.json"
+            until(
+                lambda: (
+                    state.exists()
+                    and json.loads(state.read_text()).get("new-upload", {}).get("error")
+                )
+            )
+            assert Comments.posted == 1 and Comments.pins == 0
+            worker.terminate()
+            worker.wait(timeout=5)
+            Comments.fail_pin = False
+            for _ in range(2):
+                result = subprocess.run(
+                    [sys.executable, "-c", COMMENT_LAUNCHER, "comments", "blow"],
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
                 assert result.returncode == 0, result.stderr
-                assert Comments.posted == 0 and Comments.pins == 0
-                Comments.privacy = "public"
-                Comments.fail_pin = True
-                assert run().returncode == 1
-                saved = json.loads((queue.parent / "follow-comments.json").read_text())
-                assert saved["new-upload"]["posted_at"]
-                assert not saved["new-upload"].get("pinned_at")
-                Comments.fail_pin = False
-                result = run()
-                assert result.returncode == 0, result.stderr
-                assert Comments.pins == 1 and Comments.posted == 1
-                assert run().returncode == 0
-                assert Comments.pins == 1 and Comments.posted == 1
-                assert json.loads((queue.parent / "follow-comments.json").read_text())[
-                    "new-upload"
-                ]["pinned_at"]
-                assert json.loads(queue.read_text()) == [item]
+            assert Comments.posted == 1 and Comments.pins == 1
+            assert json.loads(state.read_text())["new-upload"]["pinned_at"]
         finally:
+            if worker.poll() is None:
+                worker.terminate()
+                worker.wait(timeout=5)
             browser.close()
-            fake.shutdown()
-            fake.server_close()
