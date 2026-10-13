@@ -515,11 +515,12 @@ main()
             assert "Views: **9,401**" in header
             assert "Subscribers: **-2**" in header
             if monetized:
-                assert "Earnings (through " in header and "**$2.47**" in header
+                assert "Earnings: **$2.47**" in header
             else:
                 assert "Earnings: unavailable" in header
                 assert "**$2.47**" not in header
-            assert "YouTube Studio estimates" in header
+            assert "YouTube Studio estimates" not in header
+            assert "(through " not in header
             path = server[1] / "channels/blow/studio-channel.json"
             snapshot = json.loads(path.read_text())
             assert snapshot["currency"] == "USD"
