@@ -115,11 +115,7 @@ def report() -> str:
     day = date.fromisoformat(min(latest))
     label = f"{day:%a} {day.day} {day:%b}"
 
-    lines = [
-        label + "  ",
-        "YouTube Studio estimates · refreshed within 2 hours · YouTube reporting dates  ",
-        "",
-    ]
+    lines = [label + "  ", ""]
     if unavailable:
         lines += ["Totals include available channels only.  ", ""]
     for metric, heading, one_day, window in SECTIONS:
@@ -133,7 +129,6 @@ def report() -> str:
             continue
         metric_day = date.fromisoformat(min(metric_days))
         metric_window = (metric_day - timedelta(days=WINDOW - 1), metric_day)
-        freshness = f" (through {metric_day.isoformat()})" if metric_day != day else ""
         rows = {
             name: (
                 daily[name].get(metric_day.isoformat(), {}).get(metric),
@@ -145,7 +140,7 @@ def report() -> str:
             sum(r[i] for r in rows.values() if r[i] is not None) for i in range(2)
         )
         lines.append(
-            f"{heading}{freshness}: **{one_day(on_day)}** "
+            f"{heading}: **{one_day(on_day)}** "
             f"(Last {WINDOW} days: **{window(total)}**)  "
         )
         for channel in channels:
