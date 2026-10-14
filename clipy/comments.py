@@ -175,6 +175,10 @@ def pending(
     channel, states: dict, *, respect_retry: bool = True
 ) -> list[tuple[str, datetime]]:
     """Local release deadlines; this never contacts YouTube."""
+    # Follow comments are authorized only for Jonathan Blow Clips, including
+    # when old queues still contain flags from the previous broad rollout.
+    if channel.name != "blow":
+        return []
     deadlines = {}
     for item in load_queue(channel.queue_file):
         video_id = item.get("youtube_id")

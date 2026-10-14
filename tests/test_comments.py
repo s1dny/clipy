@@ -209,3 +209,39 @@ def test_comment_scheduler_resumes_failed_pin_without_posting_twice(tmp_path):
                 worker.terminate()
                 worker.wait(timeout=5)
             browser.close()
+
+
+def test_other_channels_ignore_follow_flags_without_contacting_youtube(tmp_path):
+    """Old enrollment flags must never authorize comments outside JBlow."""
+    (tmp_path / "config.toml").write_text(
+        CONFIG + "\n[channels.philosophy]\n[channels.hotz]\n[channels.casey]\n"
+    )
+    for name in ("science", "philosophy", "hotz", "casey"):
+        channel = tmp_path / "channels" / name
+        channel.mkdir(parents=True)
+        (channel / "upload_queue.json").write_text(
+            json.dumps([{"youtube_id": "other-upload", "follow_comment_pending": True}])
+        )
+        # No OAuth token or browser is available: either access would fail.
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from clipy.cli import main; main()",
+                "comments",
+                name,
+            ],
+            env={
+                **os.environ,
+                "CLIPY_CONFIG": str(tmp_path / "config.toml"),
+                "CLIPY_DATA_DIR": str(tmp_path),
+                "CLIPY_STUDIO_CDP": "http://127.0.0.1:1",
+            },
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout) == {"pinned": 0, "errors": []}
+        assert not (channel / "follow-comments.json").exists()
