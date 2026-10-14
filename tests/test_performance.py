@@ -140,7 +140,7 @@ class Metrics(YouTube):
         }
         if channel_totals:
             assert ("TOTAL_ESTIMATED_EARNINGS" in requested) == type(self).monetized
-        assert query["screenConfig"]["currency"] == "USD"
+        assert query["screenConfig"]["currency"] == ("AUD" if channel_totals else "USD")
         assert (
             query["context"]["user"]["delegationContext"]["externalChannelId"]
             == "channel-owned"
@@ -170,7 +170,7 @@ class Metrics(YouTube):
             "EXTERNAL_VIEWS": 9401,
             "EXTERNAL_WATCH_TIME": 1275840000,
             "SUBSCRIBERS_NET_CHANGE": -2,
-            "TOTAL_ESTIMATED_EARNINGS": 2468,
+            "TOTAL_ESTIMATED_EARNINGS": 3949 if channel_totals else 2468,
             "VIDEO_THUMBNAIL_IMPRESSIONS": 34567,
             "VIDEO_THUMBNAIL_IMPRESSIONS_VTR": 6.04,
         }
@@ -387,10 +387,14 @@ main()
         server[0] + "/stats", headers={"Authorization": "Bearer " + TOKEN}, timeout=3
     ).text
     assert "9,401" in header and "-2" in header
-    assert ("$2.47" in header) == monetized
+    assert ("A$3.95" in header) == monetized
+    assert "Earnings (AUD)" in header
+    assert "$2.47" not in header
     path = server[1] / "channels/blow/studio-channel.json"
     snapshot = json.loads(path.read_text())
-    assert snapshot["daily"][max(snapshot["daily"])].get("revenue_usd") is None
+    assert snapshot["currency"] == "AUD"
+    assert snapshot["daily"][max(snapshot["daily"])].get("revenue_aud") is None
+    assert all("revenue_usd" not in values for values in snapshot["daily"].values())
     assert any(
         c["name"] == "SIDCC" and c["value"] == "rotated"
         for c in json.loads(session.read_text())
@@ -418,6 +422,14 @@ main()
     )
     assert wrong.returncode == 1
     assert json.loads(path.read_text()) == snapshot
+    snapshot["currency"] = "USD"
+    path.write_text(json.dumps(snapshot))
+    old_currency = requests.get(
+        server[0] + "/stats", headers={"Authorization": "Bearer " + TOKEN}, timeout=3
+    ).text
+    assert "A$3.95" not in old_currency
+    assert "fresh AUD collection" in old_currency
+    snapshot["currency"] = "AUD"
     snapshot["observed_at"] = (datetime.now(UTC) - timedelta(hours=3)).isoformat()
     path.write_text(json.dumps(snapshot))
     stale = requests.get(

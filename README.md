@@ -97,6 +97,8 @@ subscriber changes can reach yesterday while earnings are still processing;
 each metric keeps its own date. Missing or processing data stays unavailable,
 and channel readings more than two hours old are not shown as fresh totals.
 These are YouTube reporting dates, with estimates explicitly labelled.
+Status earnings are requested from YouTube in AUD and labelled A$; older USD
+channel snapshots stay unavailable until the next successful collection.
 Below the numbers, the observer writes only tasks the owner must perform,
 or “Owner actions: none.” Run footers show input and output tokens without
 cached or reasoning token counts.
@@ -116,7 +118,8 @@ Clipy collects fresh Studio analytics hourly with `clipy studio-collect`
 using direct authenticated `yta_web/get_cards` requests. It loads cookies from
 the private session checkpoint, bootstraps the current Studio client version
 and channel delegation through HTTP, and regenerates authentication hashes
-for each request. It explicitly requests Since published and USD, retaining
+for each request. Per-video readings request Since published and USD; channel
+daily totals for status reports request AUD, retaining
 unrounded totals, provider estimates, missing values and failures. The agent
 reads these results through `recent_performance`; older UI revenue without a
 verified currency is left unknown.

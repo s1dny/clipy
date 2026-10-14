@@ -31,13 +31,13 @@ def _daily(channel: Channel) -> dict[str, dict]:
         UTC
     ) - observed <= timedelta(hours=2):
         raise ValueError("Studio channel totals are over two hours old")
-    if reading.get("currency") != "USD":
-        raise ValueError("Studio revenue currency is unverified")
+    if reading.get("currency") != "AUD":
+        raise ValueError("Studio totals need a fresh AUD collection")
     return {
         day: {
             "views": metrics.get("views"),
             "subscribers": metrics.get("subscribers"),
-            "earnings": metrics.get("revenue_usd"),
+            "earnings": metrics.get("revenue_aud"),
         }
         for day, metrics in reading["daily"].items()
     }
@@ -61,7 +61,7 @@ def _compact(n: float) -> str:
 
 
 SECTIONS = (
-    ("earnings", "Earnings", lambda n: f"${n:,.2f}", lambda n: f"${n:,.2f}"),
+    ("earnings", "Earnings (AUD)", lambda n: f"A${n:,.2f}", lambda n: f"A${n:,.2f}"),
     ("views", "Views", lambda n: f"{round(n):,}", _compact),
     (
         "subscribers",

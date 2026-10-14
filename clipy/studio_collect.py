@@ -234,6 +234,8 @@ class StudioClient:
                 metric = content.get("metric")
                 if metric in METRICS:
                     name, divisor = METRICS[metric]
+                    if metric == "TOTAL_ESTIMATED_EARNINGS":
+                        name = f"revenue_{currency.lower()}"
                     total = content.get("total")
                     values[name] = total / divisor if total is not None else None
                     anomalies = content.get("anomalies", [])
@@ -355,7 +357,12 @@ def collect(channel: Channel, client: StudioClient) -> dict:
         end = datetime.now(ZoneInfo("Australia/Sydney")).date()
         start = end - timedelta(days=70)
         daily, approximate = client.readings(
-            channel_id, None, start=start, end=end, include_revenue=monetized
+            channel_id,
+            None,
+            currency="AUD",
+            start=start,
+            end=end,
+            include_revenue=monetized,
         )
         write_json_file(
             channel.dir / "studio-channel.json",
@@ -364,7 +371,7 @@ def collect(channel: Channel, client: StudioClient) -> dict:
                 "monetized": monetized,
                 "observed_at": datetime.now(UTC).isoformat(),
                 "source": "YouTube Studio internal analytics API",
-                "currency": "USD",
+                "currency": "AUD",
                 "reporting_timezone": "America/Los_Angeles",
                 "start_date": start.isoformat(),
                 "end_date_exclusive": end.isoformat(),
