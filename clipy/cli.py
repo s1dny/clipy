@@ -48,22 +48,10 @@ def main() -> None:
         "studio-collect", help="collect fresh Studio analytics through direct API calls"
     )
     collect.add_argument("channel", nargs="?")
-    comments = commands.add_parser(
-        "comments", help="post and pin follow comments on new public uploads"
-    )
-    comments.add_argument("channel")
-    commands.add_parser(
-        "comments-serve", help="post and pin comments at scheduled release times"
-    )
     args = parser.parse_args()
 
     load_dotenv(PROJECT_ROOT / ".env")
     setup_logging()
-    if args.command == "comments-serve":
-        from .comments import serve
-
-        serve()
-        return
     if args.command == "studio-collect":
         from .studio_collect import run
 
@@ -73,12 +61,6 @@ def main() -> None:
     if args.channel not in {c.name for c in all_channels()}:
         parser.error(f"config.toml has no [channels.{args.channel}]")
     channel = Channel(args.channel)
-    if args.command == "comments":
-        from .comments import run
-
-        result = run(channel)
-        print(json.dumps(result))
-        sys.exit(bool(result["errors"]))
     config = channel.config()
 
     if args.command == "auth":

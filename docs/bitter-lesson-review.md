@@ -40,7 +40,6 @@ is the source of API methods, request schemas, parameters and HTTP verbs.
   requests, metric mappings and response parsing remain the main brittle
   integration. They supply measured data, not editorial decisions. Studio has
   no published discovery document to drive the same general interface.
-- The JBlow follow-comment restriction, which implements an existing owner rule.
 
 ## Operational scope and verification
 

@@ -146,7 +146,6 @@ def _publish_job(name: str, args: dict) -> str:
                 raise ValueError(
                     "A matching YouTube upload is not complete; check its status before retrying."
                 )
-            item["follow_comment_pending"] = True
             item["youtube_id"] = matches[0]["id"]
             item["youtube_url"] = f"https://youtube.com/watch?v={matches[0]['id']}"
             set_thumbnail(channel.youtube(), item)

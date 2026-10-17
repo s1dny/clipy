@@ -167,7 +167,6 @@ def upload_video(
             # next_chunk queries this session's received bytes after a transport
             # error, so retrying it cannot insert a second video.
             time.sleep(2 ** (failures - 1))
-    item["follow_comment_pending"] = True
     item["youtube_id"] = response["id"]
     item["youtube_url"] = f"https://youtube.com/watch?v={response['id']}"
     logger.info("Uploaded %s", item["youtube_url"])
