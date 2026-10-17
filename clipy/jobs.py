@@ -16,7 +16,7 @@ LOG_LINES = 40
 # Kinds safe to restart from the top after the server dies mid-run. The
 # pipeline caches every step; an interrupted upload may already exist on
 # YouTube, so publishes are failed instead of retried.
-RESUMABLE = {"process_source"}
+RESUMABLE = {"prepare_source", "process_source"}
 
 
 class _JobLog(logging.Handler):
@@ -38,7 +38,7 @@ class JobRunner:
     """Runs every channel's long work one job at a time on a background thread,
     persisted to disk. Each job belongs to a channel."""
 
-    def __init__(self, path: Path, handlers: dict[str, Callable[[str, dict], str]]):
+    def __init__(self, path: Path, handlers: dict[str, Callable[[str, dict], object]]):
         self.path = path
         self.handlers = handlers
         self._lock = threading.RLock()

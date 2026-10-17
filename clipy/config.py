@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 PROMPT_KEYS = (
-    "clip_extraction_prompt_template",
+    "editorial_guidance",
     "illustration_prompt_template",
     "description_template",
 )
@@ -23,7 +23,6 @@ class ConfigError(ValueError):
 
 @dataclass(frozen=True)
 class Models:
-    clip: str
     image: str
     speech: str
 
@@ -38,7 +37,7 @@ class ChannelConfig:
     # speaker's headshot on the left.
     thumbnail_template: str | None
     category_id: str
-    clip_extraction_prompt_template: str
+    editorial_guidance: str
     illustration_prompt_template: str
     description_template: str
 
@@ -91,7 +90,6 @@ def load_config(path: Path, channel: str, overrides_path: Path) -> Config:
     return Config(
         ffmpeg=_get(data.get("runtime", {}), "ffmpeg_path", "ffmpeg"),
         models=Models(
-            clip=_get(models, "clip", "z-ai/glm-5.3-flash"),
             image=_get(models, "image", "bytedance-seed/seedream-5-0-lite"),
             speech=_get(models, "speech", "universal-3-5-pro"),
         ),

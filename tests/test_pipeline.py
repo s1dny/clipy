@@ -58,9 +58,10 @@ def test_source_resume_exports_synchronized_media_without_duplicate_queue(
     shutil.copy(reference, source / f"video.{extension}")
     shutil.copy(audio, source / "audio.webm")
     (tmp_path / "config.toml").write_text(CONFIG)
-    (source / "transcript.json").write_text("{}")
-    (source / "sentences.json").write_text("[]")
-    (source / "clips.json").write_text(
+    utterances = [{"speaker": "A", "text": "A discussion.", "start": 0, "end": 8000}]
+    (source / "transcript.json").write_text(json.dumps({"utterances": utterances}))
+    selections_file = tmp_path / "selections.json"
+    selections_file.write_text(
         json.dumps(
             [
                 {
@@ -69,6 +70,7 @@ def test_source_resume_exports_synchronized_media_without_duplicate_queue(
                     "start_ms": 1300,
                     "end_ms": 6300,
                     "chapters": [],
+                    "speaker": "Jonathan Blow",
                     "thumbnail_prompt": "a binary",
                 }
             ]
@@ -83,7 +85,26 @@ def test_source_resume_exports_synchronized_media_without_duplicate_queue(
             "OPENROUTER_API_KEY": "unused",
             "OPENROUTER_API_URL": endpoint + "/",
         }
-        for _ in range(2):
+        for command in ("prepare", "transcript"):
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    "from clipy.cli import main; main()",
+                    command,
+                    "blow",
+                    "https://youtube.com/watch?v=aaaaaaaaaaa",
+                ],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            assert result.returncode == 0, result.stderr
+            if command == "transcript":
+                assert json.loads(result.stdout)["sentences"] == utterances
+        for attempt in range(2):
             # A restarted run still downloads audio; its finished cut and queue are reused.
             if not (source / "audio.webm").exists():
                 shutil.copy(audio, source / "audio.webm")
@@ -95,6 +116,7 @@ def test_source_resume_exports_synchronized_media_without_duplicate_queue(
                     "process",
                     "blow",
                     "https://youtube.com/watch?v=aaaaaaaaaaa",
+                    *(["--clips", str(selections_file)] if attempt == 0 else []),
                 ],
                 env=env,
                 capture_output=True,
@@ -188,3 +210,170 @@ def test_source_resume_exports_synchronized_media_without_duplicate_queue(
             )
             > 0.97
         )
+
+
+def test_agent_reads_full_source_and_submits_renderable_selections(server):
+    from support import call, data, wait_job
+
+    _, root = server
+    url = "https://youtube.com/watch?v=ccccccccccc"
+    source = root / "channels/blow/ccccccccccc"
+    source.mkdir()
+    utterances = [
+        {
+            "speaker": speaker,
+            "text": f"Discussion {i}.",
+            "start": i * 2000,
+            "end": (i + 1) * 2000,
+        }
+        for i, speaker in enumerate(("A", "B", "A", "A"))
+    ]
+    (source / "transcript.json").write_text(json.dumps({"utterances": utterances}))
+    prepared = wait_job(server, data(call(server, "prepare_source", {"url": url})))
+    assert prepared["status"] == "succeeded", prepared
+    sentences = []
+    offset = 0
+    while offset is not None:
+        page = data(
+            call(
+                server,
+                "get_source_transcript",
+                {"url": url, "offset": offset, "limit": 1},
+            )
+        )
+        sentences.extend(page["sentences"])
+        offset = page["next_offset"]
+    assert sentences == utterances
+    assert call(
+        server, "get_source_transcript", {"url": url}, channel="science"
+    ).is_error
+    assert call(server, "process_source", {"url": url}).is_error
+    assert call(
+        server,
+        "get_source_transcript",
+        {"url": "https://youtube.com/watch?v=../../science/bbbbbbbbbbb"},
+    ).is_error
+    assert call(
+        server, "process_source", {"url": url, "clips": [{"start_ms": 4, "end_ms": 2}]}
+    ).is_error
+    ffmpeg(
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=192x108:rate=30:duration=8",
+        "-c:v",
+        "libx264",
+        "-threads",
+        "1",
+        source / "video.mp4",
+    )
+    ffmpeg(
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=500:duration=8",
+        "-c:a",
+        "libopus",
+        source / "audio.webm",
+    )
+    selections = [
+        {
+            "title": "An editorial choice",
+            "description": "An accurate argument summary.",
+            "start_ms": sentences[1]["start"],
+            "end_ms": sentences[-1]["end"],
+            "thumbnail_prompt": "a bold object",
+            "chapters": [],
+        }
+    ]
+    before = data(call(server, "list_queue"))
+    args = {"url": url, "clips": selections}
+    failed = wait_job(
+        server,
+        data(
+            call(
+                server,
+                "process_source",
+                args | {"clips": [selections[0] | {"end_ms": 10000}]},
+            )
+        ),
+    )
+    assert failed["status"] == "failed"
+    assert not (source / "clips.json").exists()
+    rendered = wait_job(server, data(call(server, "process_source", args)))
+    assert rendered["status"] == "succeeded", rendered
+    queue = data(call(server, "list_queue"))
+    added = [clip for clip in queue if clip["id"] not in {old["id"] for old in before}]
+    assert [(clip["title"], clip["description"]) for clip in added] == [
+        (clip["title"], clip["description"]) for clip in selections
+    ]
+    clip_path = Path(
+        json.loads((source.parent / "upload_queue.json").read_text())[-1]["clip_path"]
+    )
+    duration = float(
+        subprocess.check_output(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "csv=p=0",
+                str(clip_path),
+            ]
+        )
+    )
+    assert duration == pytest.approx(
+        (selections[0]["end_ms"] - selections[0]["start_ms"]) / 1000, abs=0.05
+    )
+    # A retry reuses the saved editorial choices and export, without duplication.
+    ffmpeg(
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=500:duration=8",
+        "-c:a",
+        "libopus",
+        source / "audio.webm",
+    )
+    resumed = wait_job(server, data(call(server, "process_source", {"url": url})))
+    assert resumed["status"] == "succeeded", resumed
+    assert data(call(server, "list_queue")) == queue
+    changed = wait_job(
+        server,
+        data(
+            call(
+                server,
+                "process_source",
+                args | {"clips": [selections[0] | {"start_ms": 0}]},
+            )
+        ),
+    )
+    assert changed["status"] == "failed"
+    assert data(call(server, "list_queue")) == queue
+
+    # A source can explicitly produce nothing, without downloading media or
+    # requiring a headshot, and that decision survives a retry.
+    empty_url = "https://youtube.com/watch?v=ddddddddddd"
+    empty_source = root / "channels/science/ddddddddddd"
+    empty_source.mkdir()
+    (empty_source / "sentences.json").write_text(json.dumps(sentences))
+    science_before = data(call(server, "list_queue", channel="science"))
+    for selected in ({"clips": []}, {}):
+        job = data(
+            call(
+                server,
+                "process_source",
+                {
+                    "url": empty_url,
+                    "speaker": "Robert Sapolsky",
+                    **selected,
+                },
+                channel="science",
+            )
+        )
+        assert wait_job(server, job, channel="science")["status"] == "succeeded"
+    assert json.loads((empty_source / "clips.json").read_text()) == []
+    assert data(call(server, "list_queue", channel="science")) == science_before
+    assert not (empty_source / "clips").exists()

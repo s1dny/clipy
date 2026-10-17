@@ -28,11 +28,6 @@ def save_queue(clips: list[dict], queue_file: Path) -> None:
         if existing:
             if clip.get("thumbnail_path"):
                 existing["thumbnail_path"] = clip["thumbnail_path"]
-            existing.setdefault("chapters", clip.get("chapters", []))
-            existing.setdefault("speaker", clip.get("speaker"))
-            existing.setdefault("start_ms", clip["start_ms"])
-            existing.setdefault("end_ms", clip["end_ms"])
-            existing["cut_encoding"] = clip.get("cut_encoding", "legacy")
             continue
 
         item = {
@@ -44,7 +39,6 @@ def save_queue(clips: list[dict], queue_file: Path) -> None:
             "thumbnail_prompt": clip.get("thumbnail_prompt"),
             "chapters": clip.get("chapters", []),
             "score": clip.get("score"),
-            "cut_encoding": clip.get("cut_encoding", "legacy"),
             "start_ms": clip["start_ms"],
             "end_ms": clip["end_ms"],
             "duration_seconds": round((clip["end_ms"] - clip["start_ms"]) / 1000),
@@ -65,3 +59,25 @@ def item_id(item: dict) -> str:
     parts = Path(item["clip_path"]).parts
     clips_idx = parts.index("clips")
     return f"{parts[clips_idx - 1]}:{parts[clips_idx + 1][:2]}"
+
+
+def reconcile_uploads(queue_file: Path, videos: list[dict]) -> None:
+    """Refresh local upload state and reclaim media only after processing succeeds."""
+    by_id = {video["id"]: video for video in videos}
+    queue = load_queue(queue_file)
+    changed = False
+    for item in queue:
+        video = by_id.get(item.get("youtube_id"))
+        if video is None:
+            continue
+        for key, value in {
+            "publish_at": video["publish_time"],
+            "processing_status": video["processing_status"],
+        }.items():
+            if item.get(key) != value:
+                item[key] = value
+                changed = True
+        if video["upload_status"] == "processed" and video["duration_seconds"] > 0:
+            Path(item["clip_path"]).unlink(missing_ok=True)
+    if changed:
+        write_json_file(queue_file, queue)

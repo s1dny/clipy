@@ -17,9 +17,7 @@ METRICS = {
 }
 
 
-def record(
-    channel: Channel, readings: list[dict], *, source="visible YouTube Studio UI"
-) -> dict:
+def record(channel: Channel, readings: list[dict], *, source: str) -> dict:
     known = {v["id"] for v in channel_videos(channel, refresh=True)}
     now = datetime.now(UTC)
     clean = []
@@ -88,10 +86,6 @@ def latest(channel: Channel) -> dict:
     videos = {}
     for reading in sorted(history, key=lambda r: r["observed_at"]):
         metrics = dict(reading["metrics"])
-        if reading.get("currency") != "USD":
-            # Earlier browser captures used the account's currency preference.
-            # Keep the original history but do not present it as verified USD.
-            metrics["revenue_usd"] = None
         age = (
             datetime.now(UTC) - datetime.fromisoformat(reading["observed_at"])
         ).total_seconds() / 3600

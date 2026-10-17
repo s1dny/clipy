@@ -37,14 +37,6 @@ def openrouter_message(data: dict) -> dict[str, Any]:
     return data["choices"][0]["message"]
 
 
-def openrouter_json(body: dict, timeout: int) -> dict:
-    """A JSON-mode completion's object, ignoring any text around it."""
-    text = openrouter_message(openrouter_request(body, timeout)).get("content")
-    if not isinstance(text, str):
-        raise TypeError("OpenRouter response did not include text content")
-    return json.loads(text[text.index("{") : text.rindex("}") + 1])
-
-
 def extract_video_id(url: str) -> str:
     """Extract the video ID from a YouTube URL."""
     parsed = urlparse(url)

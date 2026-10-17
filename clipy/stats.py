@@ -10,13 +10,6 @@ from .upload import YouTubeAuthError
 logger = logging.getLogger(__name__)
 
 WINDOW = 30
-CHANNEL_LABELS = {
-    "blow": "JBlow",
-    "science": "Science",
-    "philosophy": "Philosophy",
-    "hotz": "Hotz",
-    "casey": "Casey",
-}
 
 
 def _daily(channel: Channel) -> dict[str, dict]:
@@ -73,22 +66,11 @@ SECTIONS = (
 
 
 def report() -> str:
-    order = {name: index for index, name in enumerate(CHANNEL_LABELS)}
-    channels = sorted(
-        all_channels(), key=lambda channel: order.get(channel.name, len(order))
-    )
+    channels = all_channels()
     names, daily, unavailable = {}, {}, {}
     for channel in channels:
-        names[channel.name] = CHANNEL_LABELS.get(channel.name, channel.name)
+        names[channel.name] = channel.config().channel.handle
         try:
-            if channel.name not in CHANNEL_LABELS:
-                mine = (
-                    channel.youtube()
-                    .channels()
-                    .list(part="snippet", mine=True)
-                    .execute()
-                )
-                names[channel.name] = mine["items"][0]["snippet"]["title"]
             data = _daily(channel)
             if data:
                 daily[channel.name] = data

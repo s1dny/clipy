@@ -5,13 +5,14 @@ import argparse
 import json
 import logging
 import sys
+from pathlib import Path
 
 from dotenv import load_dotenv
 
 from .channel import PROJECT_ROOT, Channel, all_channels
+from .clips import ClipSelection
 from .logging_config import setup_logging
-from .pipeline import process_source
-from .studio import record
+from .pipeline import prepare_source, process_source, source_transcript
 from .upload import authorize
 
 logger = logging.getLogger(__name__)
@@ -26,10 +27,23 @@ def main() -> None:
     process.add_argument("channel")
     process.add_argument("url")
     process.add_argument("--speaker", help="the source's main speaker")
-    studio = commands.add_parser(
-        "studio-import", help="import observed Studio readings as JSON from stdin"
+    process.add_argument(
+        "--clips",
+        type=Path,
+        help="JSON array of agent-authored clip selections; omit to resume",
     )
-    studio.add_argument("channel")
+    prepare = commands.add_parser(
+        "prepare", help="cache the complete source transcript"
+    )
+    prepare.add_argument("channel")
+    prepare.add_argument("url")
+    transcript = commands.add_parser(
+        "transcript", help="read a complete transcript page"
+    )
+    transcript.add_argument("channel")
+    transcript.add_argument("url")
+    transcript.add_argument("--offset", type=int, default=0)
+    transcript.add_argument("--limit", type=int, default=200)
     collect = commands.add_parser(
         "studio-collect", help="collect fresh Studio analytics through direct API calls"
     )
@@ -65,19 +79,30 @@ def main() -> None:
         result = run(channel)
         print(json.dumps(result))
         sys.exit(bool(result["errors"]))
-    if args.command == "studio-import":
-        print(json.dumps(record(channel, json.load(sys.stdin))))
-        return
     config = channel.config()
 
     if args.command == "auth":
         authorize(channel.token_file, config.channel.handle)
         return
+    if args.command == "prepare":
+        print(json.dumps(prepare_source(channel, args.url)))
+        return
+    if args.command == "transcript":
+        print(json.dumps(source_transcript(channel, args.url, args.offset, args.limit)))
+        return
     speaker = args.speaker or config.channel.speaker
     if not speaker:
         parser.error("this channel has no fixed speaker; pass --speaker")
     try:
-        process_source(channel, args.url, speaker)
+        selections = (
+            [
+                ClipSelection.model_validate(c)
+                for c in json.loads(args.clips.read_text())
+            ]
+            if args.clips
+            else None
+        )
+        process_source(channel, args.url, speaker, selections)
     except Exception:
         logger.exception("Processing failed; run it again to resume.")
         sys.exit(1)

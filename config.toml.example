@@ -5,7 +5,6 @@
 ffmpeg_path = "ffmpeg"
 
 [models]
-clip = "z-ai/glm-5.3-flash"
 image = "bytedance-seed/seedream-5-0-lite"
 speech = "universal-3-5-pro"
 
@@ -17,22 +16,10 @@ Original: {original_url}
 """
 
 # {speaker} is the source's main speaker.
-clip_extraction_prompt_template = """
+editorial_guidance = """
 Extract good standalone clips of {speaker} from this transcript.
 
-Return JSON in this exact format:
-{
-  "clips": [
-    {
-      "title": "{speaker} on [subject]",
-      "description": "Brief description for YouTube",
-      "start_ms": 12345,
-      "end_ms": 67890,
-      "score": 7,
-      "thumbnail_prompt": "Detailed prompt for generating a thumbnail image."
-    }
-  ]
-}
+Write the selections yourself and submit them through process_source using its schema.
 """
 
 illustration_prompt_template = """
@@ -70,7 +57,7 @@ Twitch: https://www.twitch.tv/georgehotz
 #georgehotz #programming #ai #tinygrad
 """
 
-clip_extraction_prompt_template = """
+editorial_guidance = """
 This is a transcript of an original long-form video featuring George Hotz, the programmer and hacker behind comma.ai and tinygrad.
 
 Find strong standalone clips about AI, machine learning, programming, GPUs, software performance, hacking, self-driving technology, or building a technology company. Prefer one clear argument, a concrete explanation, or a demonstration that makes sense without the preceding stream. Skip unrelated politics, personal tangents, small talk, sponsorships, silent coding and debugging that requires extensive context.
@@ -82,19 +69,7 @@ Rules:
 - Clips must not overlap. Score each 1-10 for standalone watch-time potential.
 - Titles start with "George Hotz on" and name one concrete subject or supported claim, ideally under 65 characters. Never invent a claim or imply an old opinion is current.
 
-Return JSON in this exact format:
-{
-  "clips": [
-    {
-      "title": "George Hotz on [short concrete subject]",
-      "description": "Two or three accurate sentences explaining the argument and technologies discussed.",
-      "start_ms": 12345,
-      "end_ms": 67890,
-      "score": 8,
-      "thumbnail_prompt": "One simple bold object, symbol or scene representing the central idea. No names, faces or style instructions."
-    }
-  ]
-}
+Write the selections yourself and submit them through process_source using its schema.
 """
 
 [channels.casey]
@@ -113,7 +88,7 @@ Casey's work: https://caseymuratori.com/
 #caseymuratori #programming #softwareperformance #gamedev
 """
 
-clip_extraction_prompt_template = """
+editorial_guidance = """
 This is a transcript of an original long-form video featuring Casey Muratori, the programmer behind Handmade Hero and Computer, Enhance!.
 
 Find strong standalone clips about programming, software performance, software design, clean code, object-oriented programming, C/C++, game engines, hardware, or learning to build software. Prefer one clear argument, a concrete explanation, or a demonstration that makes sense without the preceding talk or stream. Skip small talk, sponsorships, unrelated personal or political tangents, silent coding, and debugging that requires extensive context. Public talks, interviews and free streams are sources; paid course lessons are not.
@@ -125,17 +100,5 @@ Rules:
 - Clips must not overlap. Score each 1-10 for standalone watch-time potential.
 - Titles start with "Casey Muratori on" followed by one concrete subject or supported claim, ideally under 65 characters. Never invent a claim.
 
-Return JSON in this exact format:
-{
-  "clips": [
-    {
-      "title": "Casey Muratori on [short concrete subject]",
-      "description": "Two or three accurate sentences explaining the argument and technologies discussed.",
-      "start_ms": 12345,
-      "end_ms": 67890,
-      "score": 8,
-      "thumbnail_prompt": "One simple bold object, symbol or scene representing the central idea. No names, faces or style instructions."
-    }
-  ]
-}
+Write the selections yourself and submit them through process_source using its schema.
 """

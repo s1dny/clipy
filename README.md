@@ -21,7 +21,7 @@ analytics, looks at how recent uploads are doing, and decides what to change.
 It finds new source videos, checks that the right person does most of the
 talking, and starts clipping them. On Mondays it schedules the coming week's
 uploads, one per day. It also rewrites titles and thumbnails on videos that
-are underperforming, and can adjust the prompts that pick and title clips.
+are underperforming, and learns which excerpts and titles work from the results.
 
 On the Science and Philosophy channels the agent also chooses who to feature.
 It tries different speakers and topics to learn what brings in watch hours,
@@ -51,23 +51,48 @@ and run shell commands inside its container.
 work. Each channel in `config.toml` gets its own endpoint at
 `/mcp/<channel>`, so an agent can only touch its own channel. The tools cover:
 
-- analytics, ranked by revenue or watch hours, plus thumbnail impressions and
-  click-through rates
+- general Google API access driven by searchable official discovery specs,
+  plus raw dated counter snapshots and Studio observations
 - searching for source videos and checking who speaks in them
 - starting clipping and upload jobs, which run in the background
-- editing queued clips and live videos
-- reading and changing the clip-picking prompts
+- editing queued clips, rendering artwork, and raw API requests for live videos
+- reading and changing reusable editorial guidance
 - reading and writing the notebook
 
-**The clipping pipeline** downloads a source video, transcribes it with
-AssemblyAI (which labels who is speaking), and asks a language model to pick
-the best clips of the main speaker. For each clip it writes a summary and
-YouTube chapters, cuts the video with ffmpeg, draws a thumbnail, and adds the
-clip to the channel's queue. Every step saves its result, so a job that stops
-partway picks up where it left off. Jobs from all channels share one queue and
-run one at a time.
+The API interface has no per-endpoint wrappers or hand-written metric catalog.
+`google_api_spec` searches Google's published discovery documents bundled with
+the installed client and returns exact subtrees by JSON Pointer.
+`google_api_read` and `google_api_write` invoke the named service method with
+its original parameters and return the service response. Read/write separation
+comes from each method's published HTTP verb. Existing OAuth scopes are kept.
+Media uploads are restricted to files inside the current channel's directory.
+Every mutation records intent, measured observations, and outcome under
+`channels/<channel>/api-writes/`; failed writes remain unconfirmed until Codex
+checks the remote state. No write retries happen automatically.
 
-Every new upload receives `feel free to follow me on x :) https://x.com/aidensidny`
+**Codex owns the editorial workflow end to end.** It starts `prepare_source`
+to download and transcribe a source with AssemblyAI, then reads the complete
+speaker-labelled, timestamped transcript through `get_source_transcript`
+(following every page to the end). The same Codex session that knows the
+channel strategy and analytics chooses the excerpts and writes their titles,
+descriptions, chapters and thumbnail concepts. It submits those choices to
+`process_source`; the server only validates the render contract, cuts with
+ffmpeg, draws illustrations with the image service and adds the clips to the
+queue. No transcript or clip text is sent to another text model.
+
+Preparation and rendering run as persisted background jobs. Codex records the
+unfinished stage in its notebook and resumes it next run. Rendering retries
+reuse saved selections; submitting a different selection over existing exports
+is rejected to preserve queue identity. Empty selections explicitly record a
+source with no worthwhile clips. Jobs from all channels run one at a time.
+
+For manual work, use `clipy prepare CHANNEL URL`, read all pages with
+`clipy transcript CHANNEL URL --offset N`, then submit a JSON array matching
+the MCP `process_source` schema with `clipy process CHANNEL URL --clips FILE`.
+Omit `--clips` only to resume saved selections. Non-fixed channels also need
+`--speaker`. These commands do not choose excerpts for you.
+
+Every new Jonathan Blow upload receives `feel free to follow me on x :) https://x.com/aidensidny`
 as a pinned comment after it becomes public. `clipy comments-serve` watches
 local upload-queue changes and wakes at each video's `publish_at` time. It
 confirms public status, then posts and pins in an isolated copy of the signed-in
@@ -80,8 +105,7 @@ The original-video link includes the clip's start timestamp.
 
 Clips are fully re-encoded with aligned audio and video timelines. This avoids
 the frame repetition and audio drift possible when splicing copied H.264
-onto a re-encoded opening segment. Older queued clips are rebuilt with full
-encoding before upload; already uploaded videos are left as they are.
+onto a re-encoded opening segment. Exports use one continuous encode with aligned timelines.
 
 **Thumbnails** have a picture on the left and, on the white right side, an
 illustration of the clip's main idea made by an image model. For Jonathan
@@ -110,9 +134,9 @@ existing channels.
 
 Engagement and revenue are queried separately, with their own freshness
 dates. Hourly YouTube Data API snapshots provide current views, likes,
-comments and rounded subscriber counts, plus measured 24/48-hour changes
-once baselines exist. `recent_performance` exposes these provisional signals
-separately from delayed watch hours, revenue, impressions and CTR.
+comments and rounded subscriber counts. Codex chooses comparison windows
+and computes changes when baselines exist. `read_observations` exposes the
+raw dated snapshots separately from delayed watch hours, revenue, impressions and CTR.
 
 Clipy collects fresh Studio analytics hourly with `clipy studio-collect`
 using direct authenticated `yta_web/get_cards` requests. It loads cookies from
@@ -121,8 +145,7 @@ and channel delegation through HTTP, and regenerates authentication hashes
 for each request. Per-video readings request Since published and USD; channel
 daily totals for status reports request AUD, retaining
 unrounded totals, provider estimates, missing values and failures. The agent
-reads these results through `recent_performance`; older UI revenue without a
-verified currency is left unknown.
+reads these results through `read_observations`.
 
 Chromium is used for comment pinning, interactive Google sign-in and cookie recovery. Analytics collection
 never opens analytics pages or reads DOM cards. On authentication failure it
@@ -140,14 +163,6 @@ contains account-access credentials, not passwords: keep it out of logs,
 Git and ordinary application data. Public browser user-agent metadata is saved
 alongside it; client context and delegation variables are refreshed in memory.
 
-To import a manually observed Studio reading, pass a JSON list to
-`clipy studio-import CHANNEL`. Each reading needs `video_id`, a timezone-aware
-`observed_at`, the matching Studio analytics `url`, `period: "since_published"`,
-`approximate`, and `metrics` (views, impressions, ctr_percent, watch_hours,
-subscribers or revenue_usd; unavailable values are null). Revenue also requires
-`currency: "USD"`. Only this channel's
-videos and readings captured in the last two hours are accepted.
-
 Upload success is distinct from processing success. Clipy retains each MP4
 until YouTube confirms successful processing, and synchronises queue dates
 with YouTube's current calendar. Agents can inspect and repair failed or
@@ -159,11 +174,9 @@ New release batches still happen on Mondays.
 
 ## The one manual step
 
-The YouTube API cannot turn on monetization for a video. For the Jonathan
-Blow channel, the agent lists each week's scheduled videos in the report.
-Before the first one goes live, open YouTube Studio, go to Content, select
-those videos, and choose Edit, then Monetization: On. The other two channels
-need nothing.
+The owner handles Jonathan Blow monetization in YouTube Studio. The daily
+report raises only new issues requiring account access or an owner decision.
+The other channels need no per-upload monetization step.
 
 ## Production
 
@@ -213,21 +226,21 @@ ssh -t azalab-0 "kubectl -n clipy exec -it deploy/clipy -- sh -c 'mkdir -p /data
 
 ## Configuration
 
-`config.toml` holds every setting that is not a secret: which models to use,
+`config.toml` holds every setting that is not a secret: which transcription and image models to use,
 and for each channel its handle, YouTube category, speaker, thumbnail
 template and prompt templates. Settings under `[defaults]` apply to every
 channel, and `[channels.<name>]` overrides them. A channel with a `speaker` is
 about that one person. A channel without a `thumbnail_template` uses speaker
 headshots. Start by copying `config.toml.example`.
 
-The agent can change the three prompt templates while it runs. Its versions
+The agent can change its editorial guidance and the image/description templates while it runs. Its versions
 are saved in the channel's `prompt_overrides.json` and take priority over
 `config.toml`.
 
 | Variable | Used by | Meaning |
 |---|---|---|
 | `ASSEMBLYAI_API_KEY` | pipeline | Transcription |
-| `OPENROUTER_API_KEY` | pipeline | Clip picking, summaries and thumbnail illustrations |
+| `OPENROUTER_API_KEY` | pipeline | Thumbnail illustrations only |
 | `CLIPY_MCP_TOKEN` | server, agent | Password for the MCP server, at least 32 characters |
 | `CLIPY_DATA_DIR` | everything | Where channel data, headshots and bot state live (`/data` in the image) |
 | `CLIPY_CONFIG` | server, CLI | Path to `config.toml` (defaults to the one in the repo) |

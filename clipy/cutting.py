@@ -71,7 +71,6 @@ def cut_clip(
         partial.unlink(missing_ok=True)
         return False
     partial.replace(output)
-    output.with_suffix(".encoding").write_text("full")
     return True
 
 
@@ -120,8 +119,6 @@ def cut_clips(
                 clip["clip_path"] = None
                 continue
         clip["clip_path"] = str(clip_path)
-        marker = clip_path.with_suffix(".encoding")
-        clip["cut_encoding"] = marker.read_text() if marker.exists() else "legacy"
     return clips
 
 

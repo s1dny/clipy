@@ -25,7 +25,6 @@ def setup(root, status="pending"):
         "01",
         status=status,
         start_ms=1300,
-        cut_encoding="full",
         publish_at=(datetime.now(UTC) + timedelta(days=2))
         .isoformat(timespec="seconds")
         .replace("+00:00", "Z"),

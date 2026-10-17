@@ -294,14 +294,34 @@ def metric_server(tmp_path):
 def test_collect_report_and_tune_channel_with_delayed_revenue(metric_server, monetized):
     server, env = metric_server
     Metrics.monetized = monetized
-    report = data(call(server, "channel_report", {"rank_by": "watch_hours"}))
-    assert report["data_through"] > report["revenue_data_through"]
-    assert report["daily"][0]["revenue_usd"] is None
+    window = {
+        "ids": "channel==MINE",
+        "dimensions": "day",
+        "sort": "day",
+        "startDate": (datetime.now(UTC).date() - timedelta(days=28)).isoformat(),
+        "endDate": datetime.now(UTC).date().isoformat(),
+    }
+    reports = []
+    for metrics in ("views,estimatedMinutesWatched", "estimatedRevenue"):
+        reports.append(
+            data(
+                call(
+                    server,
+                    "google_api_read",
+                    {
+                        "api": "youtubeAnalytics",
+                        "version": "v2",
+                        "method": "reports.query",
+                        "parameters": window | {"metrics": metrics},
+                    },
+                )
+            )
+        )
+    assert reports[0]["rows"][-1][0] > reports[1]["rows"][-1][0]
+    history = data(call(server, "read_observations"))["snapshots"]
     assert (
-        data(call(server, "recent_performance"))["videos"][0]["counter_changes"]["24"][
-            "views"
-        ]
-        == 40
+        history[0]["videos"]["owned-video"]["views"]
+        > history[1]["videos"]["owned-video"]["views"]
     )
     # Private uploads often lack max-resolution artwork; the API rendition still previews.
     assert image(call(server, "view_thumbnail", {"video_id": "owned-video"})).size == (
@@ -380,7 +400,7 @@ main()
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    reading = data(call(server, "recent_performance"))["studio"]["videos"][0]
+    reading = data(call(server, "read_observations"))["studio"]["videos"][0]
     assert reading["metrics"]["watch_hours"] == 354.4
     assert reading["metrics"]["ctr_percent"] == 6.04
     header = requests.get(
@@ -401,14 +421,41 @@ main()
     )
     assert session.stat().st_mode & 0o777 == 0o600
 
-    call(server, "update_video", {"video_id": "owned-video", "title": "A better title"})
-    change = json.loads((server[1] / "channels/blow/experiments.json").read_text())[-1]
-    assert (
-        change["before"]["title"] == "Example"
-        and change["after"]["title"] == "A better title"
+    arguments = {
+        "api": "youtube",
+        "version": "v3",
+        "method": "videos.list",
+        "parameters": {"part": "snippet", "id": "owned-video"},
+    }
+    current = data(call(server, "google_api_read", arguments))["items"][0]
+    body = {
+        "id": current["id"],
+        "snippet": current["snippet"] | {"title": "A better title"},
+    }
+    observation = data(call(server, "read_observations"))["snapshots"][0]
+    result = data(
+        call(
+            server,
+            "google_api_write",
+            arguments
+            | {
+                "method": "videos.update",
+                "parameters": {"part": "snippet", "body": body},
+                "observation": {"before": current, "baseline": observation},
+            },
+        )
     )
-    assert change["baseline"]["counters"]["views"] == 140
-    assert change["baseline"]["observed_at"] <= change["changed_at"]
+    verified = data(call(server, "google_api_read", arguments))["items"][0]
+    assert verified["snippet"] == body["snippet"]
+    change = json.loads(
+        (
+            server[1] / "channels/blow/api-writes" / (result["audit_id"] + ".json")
+        ).read_text()
+    )
+    assert change["observation"]["before"] == current
+    assert change["observation"]["baseline"] == observation
+    assert change["parameters"]["body"] == body
+    assert change["started_at"] <= change["finished_at"]
 
     # A wrong channel must not overwrite the good readings, and old readings cannot count as fresh.
     Metrics.studio_wrong_channel = True
@@ -436,3 +483,99 @@ main()
         server[0] + "/stats", headers={"Authorization": "Bearer " + TOKEN}, timeout=3
     ).text
     assert "9,401" not in stale
+
+
+def test_discovered_api_methods_preserve_raw_data_and_separate_writes(metric_server):
+    server, _ = metric_server
+    found = data(
+        call(server, "google_api_spec", {"query": "videos.update", "limit": 1})
+    )
+    matches = list(found["matches"])
+    offset = found["next_offset"]
+    while offset is not None:
+        page = data(
+            call(
+                server,
+                "google_api_spec",
+                {"query": "videos.update", "limit": 1, "offset": offset},
+            )
+        )
+        matches.extend(page["matches"])
+        offset = page["next_offset"]
+    pointer = next(
+        m["pointer"].rsplit("/", 1)[0] for m in matches if m["pointer"].endswith("/id")
+    )
+    method = data(call(server, "google_api_spec", {"pointer": pointer, "query": None}))[
+        "value"
+    ]
+    # Choose the executable path from Google's spec, rather than a server-side catalog.
+    operation = ".".join(method["id"].split(".")[1:])
+    args = {
+        "api": "youtube",
+        "version": "v3",
+        "method": "videos.list",
+        "parameters": {"part": "snippet", "id": "owned-video"},
+    }
+    before = data(call(server, "google_api_read", args))["items"]
+    body = {
+        "id": before[0]["id"],
+        "snippet": before[0]["snippet"] | {"title": "An experiment"},
+    }
+    mutation = args | {
+        "method": operation,
+        "parameters": {"part": "snippet", "body": body},
+    }
+    assert call(server, "google_api_read", mutation).is_error
+    assert call(server, "google_api_write", args).is_error
+    assert data(call(server, "google_api_read", args))["items"] == before
+    assert (
+        requests.post(
+            server[0] + "/mcp/science",
+            headers={"Authorization": "Bearer " + TOKEN},
+            timeout=3,
+        ).status_code
+        == 404
+    )
+    assert call(
+        server, "google_api_read", args | {"method": "videos.not_a_published_method"}
+    ).is_error
+    assert not list((server[1] / "channels/blow/api-writes").glob("*.json"))
+    changed = data(call(server, "google_api_write", mutation))
+    after = data(call(server, "google_api_read", args))["items"]
+    assert after[0]["snippet"] == body["snippet"]
+    journal = server[1] / "channels/blow/api-writes" / (changed["audit_id"] + ".json")
+    assert json.loads(journal.read_text())["response"] == changed["response"]
+    # Raw service errors are preserved and their mutation stays unconfirmed.
+    failed = call(
+        server,
+        "google_api_write",
+        args
+        | {
+            "method": "comments.insert",
+            "parameters": {
+                "part": "snippet",
+                "body": {"snippet": {"textOriginal": "test"}},
+            },
+        },
+    )
+    assert failed.is_error
+    audits = [json.loads(p.read_text()) for p in journal.parent.glob("*.json")]
+    assert any(a["status"] == "unconfirmed" and "error" in a for a in audits)
+    outside = server[1] / "outside.jpg"
+    outside.write_bytes((ROOT / "thumbnails/blow.jpg").read_bytes())
+    media = args | {
+        "method": "thumbnails.set",
+        "parameters": {"videoId": before[0]["id"]},
+        "media_path": str(outside),
+    }
+    assert call(server, "google_api_write", media).is_error
+
+    inside = server[1] / "channels/blow/artwork/test.jpg"
+    inside.parent.mkdir()
+    inside.write_bytes(outside.read_bytes())
+    uploaded = data(
+        call(server, "google_api_write", media | {"media_path": str(inside)})
+    )
+    audit = json.loads((journal.parent / (uploaded["audit_id"] + ".json")).read_text())
+    assert audit["media_path"] == str(inside)
+    assert audit["response"] == uploaded["response"]

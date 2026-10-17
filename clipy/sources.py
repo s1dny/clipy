@@ -26,10 +26,14 @@ VIDEO_ID_RE = re.compile(r"(?:youtube\.com/watch\?v=|youtu\.be/)([\w-]{11})")
 
 
 def processed_sources(channel: Channel) -> set[str]:
-    """Source ids to skip: local work dirs, the queue, the channel's own
+    """Source ids to skip: saved clip selections, the queue, the channel's own
     uploads, and the 'Original:' link in each upload's description."""
     seen = (
-        {p.name for p in channel.dir.iterdir() if p.is_dir() and len(p.name) == 11}
+        {
+            p.name
+            for p in channel.dir.iterdir()
+            if p.is_dir() and (p / "clips.json").exists()
+        }
         if channel.dir.exists()
         else set()
     )
@@ -113,21 +117,20 @@ def _caption_text(ydl: yt_dlp.YoutubeDL, info: dict, limit: int) -> str:
     return re.sub(r"\s+", " ", text)[:limit]
 
 
-SAMPLE_POINTS = (0.2, 0.5, 0.8)
-
-
-def sample_source(channel: Channel, url: str, minutes: int) -> dict:
+def sample_source(
+    channel: Channel, url: str, start_seconds: float, end_seconds: float
+) -> dict:
     ffmpeg = channel.config().ffmpeg
     with _ydl() as ydl:
         info = ydl.extract_info(url, download=False)
     duration = info.get("duration") or 0
-    span = minutes * 60
-    if duration <= span * len(SAMPLE_POINTS):
-        ranges = [(0, duration or span * len(SAMPLE_POINTS))]
-    else:
-        ranges = [
-            (duration * p - span / 2, duration * p + span / 2) for p in SAMPLE_POINTS
-        ]
+    if not 0 <= start_seconds < end_seconds or end_seconds - start_seconds > 900:
+        raise ValueError(
+            "Choose an interval of up to 15 minutes with 0 <= start < end."
+        )
+    if duration and end_seconds > duration:
+        raise ValueError("The sample extends beyond the source video.")
+    ranges = [(start_seconds, end_seconds)]
 
     with tempfile.TemporaryDirectory() as tmp:
         options = {
@@ -185,7 +188,7 @@ def sample_source(channel: Channel, url: str, minutes: int) -> dict:
             ),
             key=lambda row: -row["share_of_words_percent"],
         ),
-        "transcript": "\n".join(lines)[:6000],
+        "transcript": "\n".join(lines),
     }
 
 

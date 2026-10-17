@@ -37,13 +37,12 @@ HEADSHOT_RED = (200, 30, 30)
 
 CONFIG = """
 [models]
-clip = "test/clip"
 image = "test/image"
 speech = "test"
 
 [defaults]
 description_template = "{clip_description}\\n\\nOriginal: {original_url}"
-clip_extraction_prompt_template = "Clips of {speaker} as JSON."
+editorial_guidance = "Clips of {speaker} as JSON."
 illustration_prompt_template = "Draw {prompt} on white."
 
 [channels.blow]

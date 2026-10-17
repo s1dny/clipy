@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .common import extract_video_id
 from .config import Config, channel_names, load_config
-from .upload import get_analytics_service, get_youtube_service
+from .upload import get_youtube_service
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -50,19 +50,15 @@ class Channel:
     def prompt_overrides_file(self) -> Path:
         return self.dir / "prompt_overrides.json"
 
-    @property
-    def reach_file(self) -> Path:
-        return self.dir / "reach.json"
-
     def config(self) -> Config:
         """Read fresh each time, so prompt overrides apply at once."""
         return load_config(config_path(), self.name, self.prompt_overrides_file)
 
     def source_dir(self, url: str) -> Path:
-        return self.dir / extract_video_id(url)
+        path = self.dir / extract_video_id(url)
+        if path.resolve().parent != self.dir.resolve():
+            raise ValueError("Source must stay inside this channel's directory.")
+        return path
 
     def youtube(self):
         return get_youtube_service(self.token_file)
-
-    def analytics(self):
-        return get_analytics_service(self.token_file)

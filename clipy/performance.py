@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from .analytics import channel_videos
 from .channel import Channel, all_channels
 from .common import read_json_file, write_json_file
+from .queue import reconcile_uploads
 
 logger = logging.getLogger(__name__)
 _lock = threading.Lock()
@@ -55,42 +56,21 @@ def recent(channel: Channel) -> dict:
                 if now - datetime.fromisoformat(s["observed_at"]) < timedelta(days=35)
             ]
             write_json_file(path, history)
-        current = history[-1]
-        observed = datetime.fromisoformat(current["observed_at"])
-        windows = {}
-        for hours in (24, 48):
-            target = observed - timedelta(hours=hours)
-            baseline = min(
-                history,
-                key=lambda s: abs(datetime.fromisoformat(s["observed_at"]) - target),
-            )
-            windows[str(hours)] = (
-                baseline
-                if abs(datetime.fromisoformat(baseline["observed_at"]) - target)
-                <= timedelta(hours=2)
-                else None
-            )
-        videos = []
-        for video_id, counts in current["videos"].items():
-            deltas = {}
-            for hours, baseline in windows.items():
-                before = baseline["videos"].get(video_id) if baseline else None
-                deltas[hours] = {
-                    "baseline_at": baseline["observed_at"] if before else None,
-                    **{
-                        k: counts[k] - before[k] if before else None
-                        for k in ("views", "likes", "comments")
-                    },
-                }
-            videos.append({"id": video_id, **counts, "counter_changes": deltas})
-        return {
-            "observed_at": current["observed_at"],
-            "source": "YouTube Data API counters (provisional, not realtime Analytics)",
-            "subscribers": current["subscribers"],
-            "subscriber_precision": "API rounds to three significant figures; small changes may be hidden.",
-            "note": "24/48h counter changes need prior snapshots; null means unavailable. Counts may be corrected. These are not CTR, watch hours, revenue, or causal experiment results.",
-            "videos": sorted(videos, key=lambda v: v["publish_time"], reverse=True),
-        }
+        return history[-1]
+
+
+def observations(channel: Channel, offset: int, limit: int) -> dict:
+    """Raw observations, newest first; the agent chooses comparisons and windows."""
+    if offset < 0 or not 1 <= limit <= 200:
+        raise ValueError("offset must be nonnegative and limit between 1 and 200.")
+    recent(channel)
+    history = read_json_file(channel.dir / "performance.json")[::-1]
+    stop = min(offset + limit, len(history))
+    return {
+        "snapshots": history[offset:stop],
+        "snapshot_count": len(history),
+        "next_offset": stop if stop < len(history) else None,
+    }
 
 
 def start_sampler() -> None:
@@ -99,44 +79,9 @@ def start_sampler() -> None:
             for channel in all_channels():
                 try:
                     recent(channel)
+                    reconcile_uploads(channel.queue_file, channel_videos(channel))
                 except Exception:
                     logger.exception("Performance snapshot failed for %s", channel.name)
             threading.Event().wait(3600)
 
     threading.Thread(target=run, name="clipy-performance", daemon=True).start()
-
-
-def baseline(channel: Channel, video_id: str) -> dict:
-    from .studio import latest
-
-    current = recent(channel)
-    return {
-        "observed_at": current["observed_at"],
-        "counters": next((v for v in current["videos"] if v["id"] == video_id), None),
-        "studio": next(
-            (v for v in latest(channel)["videos"] if v["video_id"] == video_id), None
-        ),
-    }
-
-
-def record_change(
-    channel: Channel, video_id: str, before: dict, after: dict, observation: dict
-) -> None:
-    path = channel.dir / "experiments.json"
-    history = read_json_file(path) if path.exists() else []
-    now = datetime.now(UTC)
-    history = [
-        e
-        for e in history
-        if now - datetime.fromisoformat(e["changed_at"]) < timedelta(days=35)
-    ]
-    history.append(
-        {
-            "video_id": video_id,
-            "changed_at": now.isoformat(),
-            "before": before,
-            "after": after,
-            "baseline": observation,
-        }
-    )
-    write_json_file(path, history)
