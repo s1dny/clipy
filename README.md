@@ -270,7 +270,7 @@ ssh azalab-0 "kubectl -n clipy exec -i deploy/clipy -- sh -c 'mkdir -p /data/cha
 
 ## Running it locally
 
-Clipy needs Python 3.14 and ffmpeg. Install it with `uv sync`, or with
+Clipy needs Python 3.15 and ffmpeg. Install it with `uv sync`, or with
 `uv tool install --editable .` to get a `clipy` command. To clip one video by
 hand:
 

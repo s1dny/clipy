@@ -1,24 +1,24 @@
-FROM ghcr.io/astral-sh/uv:0.12 AS uv
+FROM ghcr.io/astral-sh/uv:0.13 AS uv
 FROM denoland/deno:bin AS deno
 
 FROM debian:trixie-slim AS codex
 # The agent (agent/run.sh) is Codex CLI on a ChatGPT login.
 # Codex runs tool calls through codex-code-mode-host, which ships as a separate
 # release asset and must sit beside codex.
-ARG CODEX_VERSION=0.160.0
+ARG CODEX_VERSION=0.163.0
 ARG CODEX_RELEASE=https://github.com/openai/codex/releases/download/rust-v${CODEX_VERSION}
 ADD ${CODEX_RELEASE}/codex-x86_64-unknown-linux-musl.tar.gz /codex.tgz
 ADD ${CODEX_RELEASE}/codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz /host.tgz
 RUN printf '%s  %s\n' \
-        306865417d4ee7a927785852910a527f41e1e159add390ac5ae3accb67d44a13 /codex.tgz \
-        ac6cd6288f0e39f46a33eba1cfd37711651f14f33dbc73d6a1b82eb45e038cac /host.tgz \
+        beb339e8ecd9ba057a6bb2dc81ad8ca474812edfbf0fc5056ca818797648dde4 /codex.tgz \
+        314263128ba6592e7e807c265deeaf928a692b72dcbfeb5e0b20c9423b703529 /host.tgz \
         | sha256sum -c - \
     && mkdir /out \
     && for f in /codex.tgz /host.tgz; do tar xzf "$f" -C /out; done \
     && mv /out/codex-x86_64-unknown-linux-musl /out/codex \
     && mv /out/codex-code-mode-host-x86_64-unknown-linux-musl /out/codex-code-mode-host
 
-FROM python:3.14-slim-trixie AS dependencies
+FROM python:3.15-slim-trixie AS dependencies
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
     && rm -rf /var/lib/apt/lists/*
