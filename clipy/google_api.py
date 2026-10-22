@@ -4,6 +4,7 @@ No endpoint wrappers or handwritten method/metric tables: the installed Google
 client's official discovery documents define resource paths, schemas and verbs.
 """
 
+import base64
 import json
 import uuid
 from datetime import UTC, datetime
@@ -111,9 +112,27 @@ def request(
         if not method_spec.get("mediaUpload"):
             raise ValueError("This method does not accept media uploads.")
         arguments["media_body"] = MediaFileUpload(str(path))
-    operation = getattr(resource, parts[-1])(**arguments)
+    # Ordinary discovery methods overwrite alt=media with alt=json. The
+    # generated _media method selects the raw response model instead.
+    download = read_only and arguments.get("alt") == "media"
+    if download:
+        if not method_spec.get("supportsMediaDownload"):
+            raise ValueError("This method does not support media downloads.")
+        arguments.pop("alt")
+    operation = getattr(resource, parts[-1] + ("_media" if download else ""))(
+        **arguments
+    )
     if not mutation:
-        return operation.execute(num_retries=0)
+        response = operation.execute(num_retries=0)
+        if isinstance(response, bytes):
+            try:
+                return response.decode("utf-8")
+            except UnicodeDecodeError:
+                return {
+                    "encoding": "base64",
+                    "content": base64.b64encode(response).decode("ascii"),
+                }
+        return response
     # Persist intent BEFORE the external write. A lost response is ambiguous,
     # so the agent must inspect the remote state before retrying it.
     identity = uuid.uuid4().hex

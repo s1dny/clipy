@@ -21,6 +21,7 @@ from support import (
     data,
     image,
     provider,
+    text,
     write_token,
 )
 
@@ -89,6 +90,14 @@ class Metrics(YouTube):
                     ],
                 }
             )
+        elif "/media/" in path:
+            assert query.get("alt") == ["media"]
+            body = b"date,video_id,video_thumbnail_impressions\n20261020,owned-video,34567\n"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/csv")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
         elif path.endswith("/jobs"):
             self.reply(
                 {"jobs": [{"id": "reach", "reportTypeId": "channel_reach_basic_a1"}]}
@@ -400,7 +409,29 @@ main()
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    reading = data(call(server, "read_observations"))["studio"]["videos"][0]
+    observations = data(call(server, "read_observations"))
+    reading = observations["studio"]["videos"][0]
+    channel_reading = observations["studio"]["channel"]
+    assert channel_reading["currency"] == "AUD"
+    assert channel_reading["reporting_timezone"] == "America/Los_Angeles"
+    assert channel_reading["stale"] is False
+    assert any(v["impressions"] == 34567 for v in channel_reading["daily"].values())
+    csv = text(
+        call(
+            server,
+            "google_api_read",
+            {
+                "api": "youtubereporting",
+                "version": "v1",
+                "method": "media.download",
+                "parameters": {
+                    "resourceName": "CHANNEL/channel-owned/jobs/reach/reports/report",
+                    "alt": "media",
+                },
+            },
+        )
+    )
+    assert "owned-video,34567" in csv
     assert reading["metrics"]["watch_hours"] == 354.4
     assert reading["metrics"]["ctr_percent"] == 6.04
     header = requests.get(

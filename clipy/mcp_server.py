@@ -272,6 +272,8 @@ async def google_api_read(
     """Execute a GET/HEAD/OPTIONS method using this channel's OAuth token.
     method is its dotted resource path from google_api_spec, e.g. videos.list
     or reports.query. parameters are the service's exact names and values.
+    Supported media downloads use parameters.alt="media" and return UTF-8 text
+    (such as Reporting CSV), or an encoding/content base64 object for binary.
     Returns the unmodified service response, including columns and page tokens;
     choose queries, join results and follow pagination yourself. No fixed
     metrics, rankings, retention sampling or output shaping. OAuth scopes stay

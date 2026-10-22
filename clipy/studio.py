@@ -96,7 +96,19 @@ def latest(channel: Channel) -> dict:
             "stale": age > 26,
         }
     status_path = channel.dir / "studio-status.json"
+    channel_path = channel.dir / "studio-channel.json"
+    channel_reading = read_json_file(channel_path) if channel_path.exists() else None
+    if channel_reading is not None:
+        age = (
+            datetime.now(UTC) - datetime.fromisoformat(channel_reading["observed_at"])
+        ).total_seconds() / 3600
+        channel_reading = {
+            **channel_reading,
+            "age_hours": round(age, 2),
+            "stale": age > 2,
+        }
     return {
+        "channel": channel_reading,
         "collector": read_json_file(status_path)
         if status_path.exists()
         else {"status": "not collected yet"},
