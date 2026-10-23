@@ -102,7 +102,11 @@ def test_ads_write_requires_verified_readback_and_surfaces_authentication(tmp_pa
             "endpoint": "creator/get_creator_videos",
             "payload": {
                 "videoIds": ["owned-video"],
-                "mask": {"monetization": {"all": True}},
+                "mask": {
+                    "videoId": True,
+                    "channelId": True,
+                    "monetization": {"all": True},
+                },
                 "criticalRead": True,
             },
         }

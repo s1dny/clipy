@@ -18,6 +18,10 @@ def request(channel: Channel, endpoint: str, payload: dict, observation: dict | 
     def targets(value):
         if isinstance(value, dict):
             for key, child in value.items():
+                # Masks describe requested fields; their channelId/videoId
+                # booleans are not target identifiers.
+                if key in {"mask", "videoReadMask", "updateMask"}:
+                    continue
                 if key in {"channelId", "externalChannelId"} and child != channel_id:
                     raise ValueError("Studio requests must stay within this channel.")
                 if key in {"videoId", "encryptedVideoId"} and isinstance(child, str):
