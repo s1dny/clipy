@@ -169,6 +169,14 @@ The bot checks and enables Jonathan Blow video ads through authenticated Studio
 requests, verifies the saved switch and effective monetization state, and keeps
 existing schedules and ad placements. Google can require the owner to complete
 a sign-in challenge; the report names affected videos and the exact blocker.
+The `studio_api_request` tool sends durable requests over the shared data volume
+to a worker in the private browser pod. The worker uses Studio's own signed-in
+request service, which generates session-risk and attestation data normally.
+No proof tokens or browser debugging ports are exposed to the agent. It acts
+only on the requested channel, closes only its own page, and never replays
+requests left unconfirmed by a crash or timeout. Hourly analytics collection
+continues using direct HTTP.
+
 New agreements and unsupported advertiser-suitability claims are never submitted
 automatically. The daily report raises only issues requiring account access or
 an owner decision.

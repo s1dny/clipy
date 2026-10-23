@@ -321,7 +321,9 @@ async def studio_api_request(
     endpoint: str, payload: dict, observation: dict | None = None
 ) -> dict:
     """Call an authenticated internal Studio POST endpoint for this channel.
-    Uses the server's private session; never supply cookies or context. Google
+    Uses Studio's own signed-in request service in the private browser pod;
+    Google's client handles session risk and attestation. Never supply cookies
+    or context. Google
     API OAuth alone cannot enable ordinary channel ads. Read actual Studio
     settings and permissions first. Raw endpoints/payloads must come from
     observed Studio requests or its current client code, not invented schemas.

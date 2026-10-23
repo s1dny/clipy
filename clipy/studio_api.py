@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 
 from .channel import Channel
 from .common import write_json_file
-from .studio_collect import StudioClient
+from .studio_browser import submit
 
 
 def request(channel: Channel, endpoint: str, payload: dict, observation: dict | None):
@@ -59,15 +59,12 @@ def request(channel: Channel, endpoint: str, payload: dict, observation: dict | 
         "status": "started",
     }
     write_json_file(path, audit)
-    client = StudioClient()
     try:
-        response = client.request(channel_id, endpoint, payload)
+        response = submit(channel_id, endpoint, payload)
     except Exception as exc:
         audit.update(status="unconfirmed", error=f"{type(exc).__name__}: {exc}")
         write_json_file(path, audit)
         raise
-    finally:
-        client.close()
     audit.update(
         status="responded", finished_at=datetime.now(UTC).isoformat(), response=response
     )
