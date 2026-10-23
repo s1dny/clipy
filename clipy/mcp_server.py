@@ -41,6 +41,7 @@ from . import (
     sources,
     stats,
     studio,
+    studio_api,
     thumbnails,
 )
 from .channel import PROJECT_ROOT, Channel, all_channels, data_root
@@ -313,6 +314,30 @@ async def google_api_write(
         media_path,
         observation,
     )
+
+
+@tool(WRITE)
+async def studio_api_request(
+    endpoint: str, payload: dict, observation: dict | None = None
+) -> dict:
+    """Call an authenticated internal Studio POST endpoint for this channel.
+    Uses the server's private session; never supply cookies or context. Google
+    API OAuth alone cannot enable ordinary channel ads. Read actual Studio
+    settings and permissions first. Raw endpoints/payloads must come from
+    observed Studio requests or its current client code, not invented schemas.
+    creator/get_creator_videos reads videoIds with mask={videoId:true,
+    channelId:true,monetization:{all:true},monetizedStatus:true,
+    selfCertification:{all:true},permissions:{all:true}} and criticalRead=true.
+    video_manager/metadata_update takes encryptedVideoId and
+    monetizationSettings={newMonetizeWithAds:true}. Read the video back and
+    verify userSetMonetization and effectiveStatus separately; a 200 response
+    is not verification. Permissions, reviews and authentication may block it.
+    Never invent advertiser-suitability answers or accept new agreements.
+    All requests are journaled, never automatically retried. Authentication
+    challenges are failures, not successful writes; inspect remote state.
+    Supply measured before-state in observation when changing a setting.
+    """
+    return await _sync(studio_api.request, ch(), endpoint, payload, observation)
 
 
 @tool(READ)

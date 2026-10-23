@@ -133,9 +133,12 @@ class StudioClient:
         self.configs[channel_id] = config
         return config
 
-    def _cards(
-        self, channel_id, video_id, currency, start=None, end=None, include_revenue=True
-    ):
+    def request(self, channel_id: str, endpoint: str, body: dict) -> dict:
+        """An authenticated Studio request; never retry a possibly applied write."""
+        if not re.fullmatch(r"[a-z_]+/[a-z_]+", endpoint):
+            raise ValueError("Use a Studio API resource/method endpoint.")
+        if "context" in body:
+            raise ValueError("Studio context is supplied by the channel session.")
         config = self.configs.get(channel_id) or self._bootstrap(channel_id)
         cookie = self.session.cookies.get("SAPISID", domain=".youtube.com", path="/")
         if not cookie:
@@ -162,6 +165,32 @@ class StudioClient:
             context["user"]["serializedDelegationContext"] = config[
                 "INNERTUBE_CONTEXT_SERIALIZED_DELEGATION_CONTEXT"
             ]
+        response = self.session.post(
+            ORIGIN + "/youtubei/v1/" + endpoint,
+            params={"key": config["INNERTUBE_API_KEY"], "alt": "json"},
+            headers=headers,
+            json={**body, "context": context},
+            timeout=45,
+        )
+        if response.status_code in (401, 403):
+            raise StudioAuthRequired("Studio rejected authentication")
+        response.raise_for_status()
+        payload = response.json()
+        if (
+            payload.get("responseContext", {})
+            .get("webResponseContextExtensionData", {})
+            .get("challenge")
+        ):
+            raise StudioAuthRequired(
+                "Studio requires an authentication challenge; the write is unconfirmed. Recheck the remote setting before retrying."
+            )
+        if "error" in payload:
+            raise ValueError("Studio request failed: " + str(payload["error"]))
+        return payload
+
+    def _cards(
+        self, channel_id, video_id, currency, start=None, end=None, include_revenue=True
+    ):
         entity = {"videoId": video_id} if video_id else {"channelId": channel_id}
         period = (
             {
@@ -178,7 +207,6 @@ class StudioClient:
             }
         )
         query = {
-            "context": context,
             "screenConfig": {
                 "entity": entity,
                 "timePeriod": period,
@@ -207,19 +235,7 @@ class StudioClient:
             ],
             "fetchingType": "FETCHING_TYPE_FOREGROUND",
         }
-        response = self.session.post(
-            ORIGIN + "/youtubei/v1/yta_web/get_cards",
-            params={"key": config["INNERTUBE_API_KEY"], "alt": "json"},
-            headers=headers,
-            json=query,
-            timeout=45,
-        )
-        if response.status_code in (401, 403):
-            raise StudioAuthRequired("Studio rejected authentication")
-        response.raise_for_status()
-        payload = response.json()
-        if "error" in payload:
-            raise ValueError("Studio analytics request failed")
+        payload = self.request(channel_id, "yta_web/get_cards", query)
         values = {}
         daily = {}
         estimated = False

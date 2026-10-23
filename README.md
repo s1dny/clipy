@@ -165,8 +165,13 @@ New release batches still happen on Mondays.
 
 ## The one manual step
 
-The owner handles Jonathan Blow monetization in YouTube Studio. The daily
-report raises only new issues requiring account access or an owner decision.
+The bot checks and enables Jonathan Blow video ads through authenticated Studio
+requests, verifies the saved switch and effective monetization state, and keeps
+existing schedules and ad placements. Google can require the owner to complete
+a sign-in challenge; the report names affected videos and the exact blocker.
+New agreements and unsupported advertiser-suitability claims are never submitted
+automatically. The daily report raises only issues requiring account access or
+an owner decision.
 The other channels need no per-upload monetization step.
 
 ## Production
