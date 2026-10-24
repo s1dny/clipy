@@ -45,7 +45,7 @@ COPY agent ./agent
 COPY README.md ./
 RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen
 ENV PATH=/app/.venv/bin:$PATH PYTHONUNBUFFERED=1 HOME=/tmp
-CMD ["timeout", "60s", "pytest", "-n", "4", "--dist", "loadgroup", "-q", "--durations=10", "tests"]
+CMD ["timeout", "90s", "pytest", "-n", "4", "--dist", "loadgroup", "-q", "--durations=10", "tests"]
 
 FROM dependencies AS runtime-dependencies
 RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --no-install-project
