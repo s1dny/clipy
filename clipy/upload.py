@@ -102,10 +102,30 @@ def full_description(item: dict, description_template: str) -> str:
     original_url = (
         f"https://youtube.com/watch?v={source_id}&t={item['start_ms'] // 1000}s"
     )
-    return description_template.format(
+    description = description_template.format(
         clip_description=body,
         original_url=original_url,
     )
+    # Templates and old prompt overrides cannot omit source attribution.
+    source = item.get("source") or {}
+    attribution = f"Source: {source.get('name', '')} {original_url}".replace("  ", " ")
+    if attribution not in description:
+        description += "\n\n" + attribution
+    if source.get("streamed_on"):
+        description += f"\nStreamed: {source['streamed_on']}"
+    from .editing import report_for
+
+    report = report_for(Path(item["clip_path"])) or {}
+    credits = list(
+        dict.fromkeys(
+            f"{card['image_credit']} {card['image_url']}"
+            for card in report.get("annotations", [])
+            if card.get("image_url")
+        )
+    )
+    if credits:
+        description += "\n\nImages:\n" + "\n".join(credits)
+    return description.replace("\u2014", ", ")
 
 
 def upload_video(
@@ -124,9 +144,31 @@ def upload_video(
     from httplib2 import HttpLib2Error
 
     clip_path = Path(item["clip_path"])
+    if "\u2014" in item["title"]:
+        raise ValueError("Em dashes are not allowed in video titles.")
     if item.get("edited") and os.environ.get("CLIPY_EDITED_PUBLISHING_ENABLED") != "1":
         raise ValueError(
             "Edited publishing is held until the owner approves the preview. Set CLIPY_EDITED_PUBLISHING_ENABLED=1 after approval."
+        )
+    from .clips import MIN_VIDEO_MS, SourceAttribution
+    from .editing import media_info, report_for
+
+    source = SourceAttribution.model_validate(item.get("source") or {})
+    report = report_for(clip_path)
+    if not report or report.get("source") != source.model_dump(mode="json"):
+        raise ValueError(
+            "Every video must be rendered with its verified stream date and source visible. Re-render this pending clip first."
+        )
+    media = media_info(clip_path, os.environ.get("CLIPY_FFMPEG", "ffmpeg"))
+    durations = {
+        s["codec_type"]: float(s.get("duration", 0))
+        for s in media["streams"]
+        if s["codec_type"] in {"video", "audio"}
+    }
+    duration = durations.get("video", 0)
+    if duration * 1000 < MIN_VIDEO_MS or durations.get("audio", 0) < duration - 0.25:
+        raise ValueError(
+            "Every video must be at least 8 minutes after editing; the actual rendered audio/video is too short."
         )
     body = {
         "snippet": {

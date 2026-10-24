@@ -10,10 +10,57 @@ from .clips import ClipSelection
 from .common import load_or_compute, read_json_file, write_json_file
 from .cutting import clips_to_cut, cut_clips
 from .download import download_audio, download_video, downloaded
-from .queue import save_queue
+from .queue import item_id, load_queue, save_queue
 from .transcription import build_sentence_transcript, transcribe_audio
 
 logger = logging.getLogger(__name__)
+
+
+def edit_pending_video(channel: Channel, clip_id: str, changes: dict) -> str:
+    """Re-render one pending video; the serial job runner owns all queue writes."""
+    from pathlib import Path
+
+    from .editing import render_edit
+
+    queue = load_queue(channel.queue_file)
+    item = next(q for q in queue if item_id(q) == clip_id)
+    if item["status"] != "pending":
+        raise ValueError(
+            "Only pending videos may be edited; public videos are never replaced."
+        )
+    source_id, number = clip_id.split(":")
+    url = f"https://www.youtube.com/watch?v={source_id}"
+    directory = channel.source_dir(url)
+    plans = read_json_file(directory / "clips.json")
+    plan = {**plans[int(number) - 1], **changes}
+    for key in ("title", "description", "thumbnail_prompt"):
+        if item.get(key):
+            plan[key] = item[key]
+    selection = ClipSelection.model_validate(plan)
+    selection.validate_release()
+    plan = selection.model_dump(mode="json") | {"speaker": item.get("speaker")}
+    # Keep a resumable job plan before expensive work, and the old MP4 until success.
+    output = Path(item["clip_path"])
+    write_json_file(output.parent / "pending-edit.json", plan)
+    render_edit(
+        download_video(url, directory),
+        download_audio(url, directory),
+        plan,
+        output.with_name("edited.mp4"),
+        channel.config().ffmpeg,
+    )
+    output.with_name("edited.mp4").replace(output)
+    plans[int(number) - 1] = plan
+    write_json_file(directory / "clips.json", plans)
+    item.update(
+        source=plan["source"],
+        edited=True,
+        chapters=plan["chapters"],
+        duration_seconds=selection.duration_ms / 1000,
+    )
+    write_json_file(channel.queue_file, queue)
+    (output.parent / "pending-edit.json").unlink(missing_ok=True)
+    return clip_id
 
 
 def prepare_source(channel: Channel, url: str, include_video: bool = False) -> dict:
@@ -74,9 +121,9 @@ def process_source(
         clips = read_json_file(clips_file)
         # Media and queue identity are positional. An in-flight or resumed job
         # cannot silently replace the intervals underneath existing exports.
-        if selections is not None and [s.model_dump() for s in selections] != [
-            ClipSelection.model_validate(c).model_dump() for c in clips
-        ]:
+        if selections is not None and [
+            s.model_dump(mode="json") for s in selections
+        ] != [ClipSelection.model_validate(c).model_dump(mode="json") for c in clips]:
             raise ValueError(
                 "Selections already saved; resume without clips. Use edit_clip for queued metadata."
             )
@@ -94,7 +141,7 @@ def process_source(
         duration_ms = max((s["end"] for s in sentences), default=0)
         if any(clip.end_ms > duration_ms for clip in selections):
             raise ValueError("A clip extends beyond the timestamped transcript.")
-        clips = [s.model_dump() | {"speaker": speaker} for s in selections]
+        clips = [s.model_dump(mode="json") | {"speaker": speaker} for s in selections]
         write_json_file(clips_file, clips)
     if not clips:
         return 0

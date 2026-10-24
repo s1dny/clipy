@@ -46,8 +46,10 @@ def save_queue(clips: list[dict], queue_file: Path) -> None:
                 ClipSelection.model_validate(clip).duration_ms / 1000
             ),
             "edited": any(
-                clip.get(key) for key in ("keep", "annotations", "visual_holds")
+                clip.get(key)
+                for key in ("keep", "annotations", "visual_holds", "source")
             ),
+            "source": clip.get("source"),
             "status": "pending",
             "created_at": datetime.now(UTC).isoformat(),
         }

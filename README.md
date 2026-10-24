@@ -338,3 +338,15 @@ Edited uploads are held until the owner approves the rollout preview. Enable
 `CLIPY_EDITED_PUBLISHING_ENABLED=1` on the server and remove the rollout hold in
 the daily agent instructions after approval. Rendering and inspection work
 while publishing is held; existing unedited releases are unaffected.
+
+Every release must be at least eight minutes after cuts. Source attribution
+contains a verified stream date (not an upload date), source name and evidence.
+The source and date remain on screen throughout, and every description contains
+a literal `Source:` line with its original link. Em dashes and visible category
+labels such as Reference are forbidden. Preserve worthwhile asides and anecdotes.
+The owner selected image-and-caption cards: square corners, monospace type, optional relevant real images, and room for several useful sentences. Category labels are never printed.
+
+Card images use optional `image_url` (HTTPS) and `image_credit` fields. The
+renderer keeps the exact downloaded image under the clip's `assets/` directory
+for reproducible retries and recovery; descriptions include the image credits.
+Use `edit_video` to add or revise attribution and edits on pending videos.

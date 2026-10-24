@@ -56,7 +56,7 @@ def test_cli_edited_ranges_context_hold_and_resume(tmp_path):
         "chapters": [],
         "keep": [
             {"start_ms": 500, "end_ms": 2000, "reason": "Opening argument"},
-            {"start_ms": 3500, "end_ms": 5500, "reason": "Remove a repeated aside"},
+            {"start_ms": 3500, "end_ms": 5500, "reason": "Remove stream housekeeping"},
         ],
         "annotations": [
             {
@@ -119,7 +119,7 @@ def test_cli_edited_ranges_context_hold_and_resume(tmp_path):
             "output_ms": 1500,
             "removed_source_start_ms": 2000,
             "removed_source_end_ms": 3500,
-            "reason": "Remove a repeated aside",
+            "reason": "Remove stream housekeeping",
         }
     ]
     assert report["annotations"][0]["evidence"] == "Source transcript"
@@ -150,7 +150,7 @@ def test_cli_edited_ranges_context_hold_and_resume(tmp_path):
     assert np.abs(pixels(clip, 2.2) - pixels(video, 1)).mean() < 8
     original, edited = pixels(video, 1), pixels(clip, 0.5)
     assert np.abs(original[:180] - edited[:180]).mean() < 8
-    assert np.abs(original[260:340, 20:340] - edited[260:340, 20:340]).mean() > 15
+    assert np.abs(original[315:340, 20:140] - edited[315:340, 20:140]).mean() > 15
 
     # The held rollout must reject this real queued export before contacting YouTube.
     denied = subprocess.run(

@@ -45,16 +45,23 @@ from . import (
     thumbnails,
 )
 from .channel import PROJECT_ROOT, Channel, all_channels, data_root
-from .clips import ClipSelection
+from .clips import (
+    Annotation,
+    Chapter,
+    ClipSelection,
+    SourceAttribution,
+    SourceRange,
+    VisualHold,
+)
 from .common import extract_video_id, read_json_file, write_json_file
 from .config import PROMPT_KEYS
 from .download import downloaded
 from .editing import frame, media_info, report_for
 from .jobs import JobRunner
 from .logging_config import setup_logging
+from .pipeline import edit_pending_video, source_transcript
 from .pipeline import prepare_source as prepare_transcript
 from .pipeline import process_source as run_pipeline
-from .pipeline import source_transcript
 from .queue import item_id, load_queue
 from .upload import set_thumbnail, upload_video
 
@@ -122,6 +129,7 @@ def _queue_view(item: dict) -> dict:
         "processing_status": item.get("processing_status"),
         "repair": item.get("repair"),
         "edited": item.get("edited", False),
+        "source": item.get("source"),
     }
 
 
@@ -509,6 +517,9 @@ async def process_source(
     read its complete transcript. Supply clips with title, description (your
     accurate summary), source-relative start_ms/end_ms, thumbnail_prompt,
     optional score and chapters [{start_seconds, title}] relative to FINAL output.
+    Every release must be >=8 minutes after cuts and include source={name,
+    streamed_on,evidence}, using a verified stream/recording date. This date and
+    source stay visible throughout. Never substitute upload_date. No em dashes.
     Optional keep=[{start_ms,end_ms,reason}] gives chronological retained SOURCE
     ranges within the bounding start_ms/end_ms. Omit to keep the full excerpt.
     Optional annotations=[{start_ms,end_ms,label,text,evidence}] gives brief cards
@@ -530,6 +541,8 @@ async def process_source(
     speaker = speaker or config.speaker
     if not speaker:
         raise ValueError("Name the source's main speaker.")
+    for selection in clips or []:
+        selection.validate_release()
     for job in jobs.active(channel.name, "process_source"):
         if job["args"]["url"] == url:
             raise ValueError(
@@ -546,7 +559,7 @@ async def process_source(
         headshots.panel(speaker)
     args = {"url": url, "speaker": speaker}
     if clips is not None:
-        args["clips"] = [c.model_dump() for c in clips]
+        args["clips"] = [c.model_dump(mode="json") for c in clips]
     return jobs.submit(channel.name, "process_source", args)
 
 
@@ -637,10 +650,14 @@ def _edit_clip(
     if item["status"] != "pending":
         raise ValueError(f"Clip is {item['status']}; edit the live video instead.")
     if title is not None:
+        if "\u2014" in title:
+            raise ValueError("Em dashes are not allowed in titles.")
         if len(title) > 100:
             raise ValueError("YouTube titles are at most 100 characters.")
         item["title"] = title
     if description is not None:
+        if "\u2014" in description:
+            raise ValueError("Em dashes are not allowed in descriptions.")
         item["description"] = description
     if tags is not None:
         item["tags"] = tags
@@ -669,6 +686,38 @@ async def edit_clip(
     `thumbnail_prompt` (a visual description of the idea, no style words) draws
     a fresh illustration beside the speaker; view it after."""
     return await _sync(_edit_clip, clip_id, title, description, tags, thumbnail_prompt)
+
+
+@tool(WRITE)
+async def edit_video(
+    clip_id: str,
+    source: SourceAttribution,
+    keep: list[SourceRange] | None = None,
+    annotations: list[Annotation] | None = None,
+    visual_holds: list[VisualHold] | None = None,
+    chapters: list[Chapter] | None = None,
+) -> dict:
+    """Re-render a PENDING video with its mandatory verified stream date/source,
+    and optionally revise cuts/cards/holds/chapters. None preserves existing edits;
+    [] clears that edit type. Output must remain >=8 minutes. Preserve worthwhile
+    asides; no em dashes or printed category labels. Returns a background job.
+    Never use for uploaded videos. Saved source selections are updated for recovery.
+    Source date is a stream/recording date, never an upload-date substitute."""
+    _pending(_queue(), clip_id)
+    if active := jobs.active(ch().name, "edit_video"):
+        raise ValueError(f"An edit is already active: {active[0]['id']}")
+    changes = {"source": source.model_dump(mode="json")}
+    for key, value in (
+        ("keep", keep),
+        ("annotations", annotations),
+        ("visual_holds", visual_holds),
+        ("chapters", chapters),
+    ):
+        if value is not None:
+            changes[key] = [v.model_dump(mode="json") for v in value]
+    return jobs.submit(
+        ch().name, "edit_video", {"clip_id": clip_id, "changes": changes}
+    )
 
 
 @tool(LOCAL_WRITE)
@@ -870,6 +919,9 @@ def main() -> None:
         data_root() / "jobs.json",
         {
             "process_source": _process_job,
+            "edit_video": lambda name, args: edit_pending_video(
+                Channel(name), args["clip_id"], args["changes"]
+            ),
             "prepare_source": lambda name, args: prepare_transcript(
                 Channel(name), args["url"], args.get("include_video", False)
             ),

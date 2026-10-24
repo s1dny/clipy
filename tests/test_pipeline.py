@@ -223,8 +223,8 @@ def test_agent_reads_full_source_and_submits_renderable_selections(server):
         {
             "speaker": speaker,
             "text": f"Discussion {i}.",
-            "start": i * 2000,
-            "end": (i + 1) * 2000,
+            "start": i * 160000,
+            "end": (i + 1) * 160000,
         }
         for i, speaker in enumerate(("A", "B", "A", "A"))
     ]
@@ -260,7 +260,7 @@ def test_agent_reads_full_source_and_submits_renderable_selections(server):
         "-f",
         "lavfi",
         "-i",
-        "testsrc2=size=192x108:rate=30:duration=8",
+        "color=c=blue:size=640x360:rate=1:duration=640",
         "-c:v",
         "libx264",
         "-threads",
@@ -271,7 +271,7 @@ def test_agent_reads_full_source_and_submits_renderable_selections(server):
         "-f",
         "lavfi",
         "-i",
-        "sine=frequency=500:duration=8",
+        "anullsrc=r=48000:cl=stereo:d=640",
         "-c:a",
         "libopus",
         source / "audio.webm",
@@ -284,8 +284,32 @@ def test_agent_reads_full_source_and_submits_renderable_selections(server):
             "end_ms": sentences[-1]["end"],
             "thumbnail_prompt": "a bold object",
             "chapters": [],
+            "source": {
+                "name": "Fixture",
+                "streamed_on": "2020-01-02",
+                "evidence": "Fixture metadata",
+            },
         }
     ]
+    # Public agent contract rejects short final cuts, missing dates and forbidden punctuation.
+    assert call(
+        server,
+        "process_source",
+        {"url": url, "clips": [selections[0] | {"end_ms": 161000}]},
+    ).is_error
+    assert call(
+        server,
+        "process_source",
+        {"url": url, "clips": [selections[0] | {"source": None}]},
+    ).is_error
+    assert call(
+        server,
+        "process_source",
+        {
+            "url": url,
+            "clips": [selections[0] | {"description": "Forbidden \u2014 punctuation."}],
+        },
+    ).is_error
     before = data(call(server, "list_queue"))
     args = {"url": url, "clips": selections}
     failed = wait_job(
@@ -294,7 +318,7 @@ def test_agent_reads_full_source_and_submits_renderable_selections(server):
             call(
                 server,
                 "process_source",
-                args | {"clips": [selections[0] | {"end_ms": 10000}]},
+                args | {"clips": [selections[0] | {"end_ms": 800000}]},
             )
         ),
     )
@@ -332,7 +356,7 @@ def test_agent_reads_full_source_and_submits_renderable_selections(server):
         "-f",
         "lavfi",
         "-i",
-        "sine=frequency=500:duration=8",
+        "anullsrc=r=48000:cl=stereo:d=640",
         "-c:a",
         "libopus",
         source / "audio.webm",
@@ -352,6 +376,37 @@ def test_agent_reads_full_source_and_submits_renderable_selections(server):
     )
     assert changed["status"] == "failed"
     assert data(call(server, "list_queue")) == queue
+
+    # Re-edit a pending export through the public tool, preserving its full eight minutes.
+    ffmpeg(
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=blue:size=640x360:rate=1:duration=640",
+        "-c:v",
+        "libx264",
+        "-threads",
+        "1",
+        source / "video.mp4",
+    )
+    ffmpeg(
+        "-f",
+        "lavfi",
+        "-i",
+        "anullsrc=r=48000:cl=stereo:d=640",
+        "-c:a",
+        "libopus",
+        source / "audio.webm",
+    )
+    attribution = selections[0]["source"] | {"name": "Fixture revised"}
+    edit = data(
+        call(server, "edit_video", {"clip_id": "ccccccccccc:01", "source": attribution})
+    )
+    assert wait_job(server, edit)["status"] == "succeeded"
+    report = data(call(server, "get_edit_report", {"clip_id": "ccccccccccc:01"}))
+    assert report["report"]["duration_ms"] == 480000
+    assert report["report"]["source"]["name"] == "Fixture revised"
+    assert "Source:" not in attribution["name"]
 
     # A source can explicitly produce nothing, without downloading media or
     # requiring a headshot, and that decision survives a retry.

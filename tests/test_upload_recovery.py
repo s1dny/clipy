@@ -30,7 +30,58 @@ def setup(root, status="pending"):
         .replace("+00:00", "Z"),
     )
     media = channel / "aaaaaaaaaaa/clips/01 - Clip 01/video.mp4"
-    media.write_bytes(b"video" * 400)
+    from clipy.editing import render_edit
+
+    source = {
+        "name": "Fixture stream",
+        "streamed_on": "2020-01-02",
+        "evidence": "Fixture broadcast metadata",
+    }
+    item["source"] = source
+    item["edited"] = True
+    raw = root / "raw.mp4"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-v",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=blue:size=640x360:rate=1:duration=480",
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=r=48000:cl=stereo",
+            "-t",
+            "480",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-threads",
+            "1",
+            "-c:a",
+            "aac",
+            str(raw),
+        ],
+        check=True,
+    )
+    render_edit(
+        raw,
+        raw,
+        {
+            "title": item["title"],
+            "description": item["description"],
+            "thumbnail_prompt": "a compiler",
+            "start_ms": 0,
+            "end_ms": 480000,
+            "source": source,
+        },
+        media,
+        "ffmpeg",
+    )
     queue = channel / "upload_queue.json"
     queue.write_text(json.dumps([item]))
     write_token(channel)
@@ -47,7 +98,9 @@ def test_scheduled_upload_survives_reset_and_lost_confirmation(tmp_path):
     YouTube.reset = True
     with (
         provider(YouTube) as endpoint,
-        app(tmp_path, FAKE_GOOGLE_URL=endpoint) as (server, _),
+        app(
+            tmp_path, FAKE_GOOGLE_URL=endpoint, CLIPY_EDITED_PUBLISHING_ENABLED="1"
+        ) as (server, _),
     ):
         job = data(
             call(
@@ -63,6 +116,11 @@ def test_scheduled_upload_survives_reset_and_lost_confirmation(tmp_path):
         assert saved["publish_at"] == item["publish_at"]
         assert YouTube.inserted["status"]["privacyStatus"] == "private"
         assert YouTube.thumbnails == 1
+        assert (
+            "Source: Fixture stream https://youtube.com/watch?v=aaaaaaaaaaa&t=1s"
+            in YouTube.inserted["snippet"]["description"]
+        )
+        assert "Streamed: 2020-01-02" in YouTube.inserted["snippet"]["description"]
         assert "watch?v=aaaaaaaaaaa&t=1s" in YouTube.inserted["snippet"]["description"]
         # The provider succeeded but the local upload confirmation was lost.
         item["status"] = "failed"
@@ -87,11 +145,11 @@ def test_repair_preserves_release_and_never_replaces_public_video(tmp_path):
             "-f",
             "lavfi",
             "-i",
-            "testsrc2=size=160x120:rate=24:duration=1",
+            "color=c=blue:size=640x360:rate=1:duration=480",
             "-f",
             "lavfi",
             "-i",
-            "sine=duration=1",
+            "sine=duration=480",
             "-c:v",
             "libx264",
             "-c:a",
@@ -101,7 +159,18 @@ def test_repair_preserves_release_and_never_replaces_public_video(tmp_path):
         check=True,
     )
     (media.parents[2] / "clips.json").write_text(
-        json.dumps([{"start_ms": 0, "end_ms": 1000}])
+        json.dumps(
+            [
+                {
+                    "title": item["title"],
+                    "description": item["description"],
+                    "thumbnail_prompt": "a compiler",
+                    "start_ms": 0,
+                    "end_ms": 480000,
+                    "source": item["source"],
+                }
+            ]
+        )
     )
     original = {
         "id": "broken-upload",
@@ -124,7 +193,12 @@ def test_repair_preserves_release_and_never_replaces_public_video(tmp_path):
     YouTube.existing = [original]
     with (
         provider(YouTube) as endpoint,
-        app(tmp_path, FAKE_GOOGLE_URL=endpoint, FAKE_MEDIA=str(asset)) as (server, _),
+        app(
+            tmp_path,
+            FAKE_GOOGLE_URL=endpoint,
+            FAKE_MEDIA=str(asset),
+            CLIPY_EDITED_PUBLISHING_ENABLED="1",
+        ) as (server, _),
     ):
         refused = data(call(server, "repair_upload", {"video_id": "broken-upload"}))
         assert wait_job(server, refused)["status"] == "failed"
