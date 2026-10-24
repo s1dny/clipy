@@ -260,7 +260,7 @@ def test_agent_reads_full_source_and_submits_renderable_selections(server):
         "-f",
         "lavfi",
         "-i",
-        "color=c=blue:size=640x360:rate=1:duration=640",
+        "color=c=blue:size=320x180:rate=1/10:duration=640",
         "-c:v",
         "libx264",
         "-threads",
@@ -271,10 +271,10 @@ def test_agent_reads_full_source_and_submits_renderable_selections(server):
         "-f",
         "lavfi",
         "-i",
-        "anullsrc=r=48000:cl=stereo:d=640",
+        "anullsrc=r=8000:cl=mono:d=640",
         "-c:a",
-        "libopus",
-        source / "audio.webm",
+        "pcm_s16le",
+        source / "audio.wav",
     )
     selections = [
         {
@@ -356,10 +356,10 @@ def test_agent_reads_full_source_and_submits_renderable_selections(server):
         "-f",
         "lavfi",
         "-i",
-        "anullsrc=r=48000:cl=stereo:d=640",
+        "anullsrc=r=8000:cl=mono:d=640",
         "-c:a",
-        "libopus",
-        source / "audio.webm",
+        "pcm_s16le",
+        source / "audio.wav",
     )
     resumed = wait_job(server, data(call(server, "process_source", {"url": url})))
     assert resumed["status"] == "succeeded", resumed
@@ -382,7 +382,7 @@ def test_agent_reads_full_source_and_submits_renderable_selections(server):
         "-f",
         "lavfi",
         "-i",
-        "color=c=blue:size=640x360:rate=1:duration=640",
+        "color=c=blue:size=320x180:rate=1/10:duration=640",
         "-c:v",
         "libx264",
         "-threads",
@@ -393,10 +393,10 @@ def test_agent_reads_full_source_and_submits_renderable_selections(server):
         "-f",
         "lavfi",
         "-i",
-        "anullsrc=r=48000:cl=stereo:d=640",
+        "anullsrc=r=8000:cl=mono:d=640",
         "-c:a",
-        "libopus",
-        source / "audio.webm",
+        "pcm_s16le",
+        source / "audio.wav",
     )
     attribution = selections[0]["source"] | {"name": "Fixture revised"}
     edit = data(

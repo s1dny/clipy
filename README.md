@@ -11,8 +11,8 @@ hours if it is not monetized yet.
 | [Jonathan Blow Clips](https://www.youtube.com/@JonathanBlowClips) (`blow`) | Jonathan Blow only | Ad revenue |
 | [Casey Muratori Clips](https://www.youtube.com/@caseymuratoriclips) (`casey`) | Casey Muratori only | Watch hours |
 | [George Hotz Clips](https://www.youtube.com/@georgehotzclips) (`hotz`) | George Hotz only | Watch hours |
-| [Science Clips Daily](https://www.youtube.com/@ScienceClipsDaily) (`science`) | Anyone credible explaining science | Watch hours |
-| [Philosophy Clips Daily](https://www.youtube.com/@PhilosophyClipsDaily) (`philosophy`) | Anyone credible on philosophy and big ideas | Watch hours |
+| [t3gg Clips](https://www.youtube.com/@t3ggclips) (`science`) | Theo only | Watch hours |
+| [Tsoding Clips](https://www.youtube.com/@TsodingClips) (`philosophy`) | Tsoding only | Watch hours |
 
 ## What happens each day
 
@@ -23,9 +23,9 @@ talking, and starts clipping them. On Mondays it schedules the coming week's
 uploads, one per day. It also rewrites titles and thumbnails on videos that
 are underperforming, and learns which excerpts and titles work from the results.
 
-On the Science and Philosophy channels the agent also chooses who to feature.
-It tries different speakers and topics to learn what brings in watch hours,
-and it finds a photo of each new speaker for the thumbnails.
+The `science` and `philosophy` directory names are retained for account continuity;
+they now run t3gg Clips and Tsoding Clips, respectively.
+Each channel experiments with topics and presentation within its named speaker's material. Thumbnails use that speaker's verified photo.
 
 The agent has no memory of its own between runs. Everything it knows comes
 from a notebook it reads at the start of each run and updates at the end: its
@@ -334,10 +334,10 @@ frames, exact edit timestamps, retained/removed source ranges, evidence and
 technical stream/duration verification. Every edited export stores
 `edit-report.json` beside its MP4. Recovery replays the same saved edits.
 
-Edited uploads are held until the owner approves the rollout preview. Enable
-`CLIPY_EDITED_PUBLISHING_ENABLED=1` on the server and remove the rollout hold in
-the daily agent instructions after approval. Rendering and inspection work
-while publishing is held; existing unedited releases are unaffected.
+The owner approved the square, monospace image-and-caption format on 24 October
+2026. Every new video uses this format. Production enables
+`CLIPY_EDITED_PUBLISHING_ENABLED=1`; the default remains off in other environments
+until explicitly enabled. Existing videos are not re-edited.
 
 Every release must be at least eight minutes after cuts. Source attribution
 contains a verified stream date (not an upload date), source name and evidence.

@@ -1,6 +1,7 @@
 """Publish, reconcile a lost response and repair a broken release over MCP/HTTP."""
 
 import json
+import shutil
 import subprocess
 from datetime import UTC, datetime, timedelta
 
@@ -39,7 +40,7 @@ def setup(root, status="pending"):
     }
     item["source"] = source
     item["edited"] = True
-    raw = root / "raw.mp4"
+    raw = root / "raw.mkv"
     subprocess.run(
         [
             "ffmpeg",
@@ -49,11 +50,11 @@ def setup(root, status="pending"):
             "-f",
             "lavfi",
             "-i",
-            "color=c=blue:size=640x360:rate=1:duration=480",
+            "color=c=blue:size=320x180:rate=1/10:duration=480",
             "-f",
             "lavfi",
             "-i",
-            "anullsrc=r=48000:cl=stereo",
+            "anullsrc=r=8000:cl=mono",
             "-t",
             "480",
             "-c:v",
@@ -63,7 +64,7 @@ def setup(root, status="pending"):
             "-threads",
             "1",
             "-c:a",
-            "aac",
+            "pcm_s16le",
             str(raw),
         ],
         check=True,
@@ -136,28 +137,8 @@ def test_repair_preserves_release_and_never_replaces_public_video(tmp_path):
     item, queue, media = setup(tmp_path, "uploaded")
     item["youtube_id"] = "broken-upload"
     queue.write_text(json.dumps([item]))
-    asset = tmp_path / "source.mp4"
-    subprocess.run(
-        [
-            "ffmpeg",
-            "-v",
-            "error",
-            "-f",
-            "lavfi",
-            "-i",
-            "color=c=blue:size=640x360:rate=1:duration=480",
-            "-f",
-            "lavfi",
-            "-i",
-            "sine=duration=480",
-            "-c:v",
-            "libx264",
-            "-c:a",
-            "aac",
-            str(asset),
-        ],
-        check=True,
-    )
+    asset = tmp_path / "source.mkv"
+    shutil.copyfile(tmp_path / "raw.mkv", asset)
     (media.parents[2] / "clips.json").write_text(
         json.dumps(
             [

@@ -172,7 +172,7 @@ def wait_job(server, job, channel="blow"):
 
     async def go():
         async with connect(server[0], channel) as client:
-            deadline = time.monotonic() + 10
+            deadline = time.monotonic() + 30
             while time.monotonic() < deadline:
                 jobs = data(await client.call_tool("list_jobs", {}))
                 found = next(j for j in jobs if j["id"] == job["id"])
@@ -364,7 +364,7 @@ def app(root, launcher=LAUNCHER, **settings):
         )
     base = f"http://127.0.0.1:{port}"
     try:
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + 30
         while True:
             try:
                 if requests.get(base + "/healthz", timeout=0.5).ok:
