@@ -321,7 +321,16 @@ def render_edit(
         for i, hold in enumerate(selection.visual_holds):
             still = work / f"hold-{i}.jpg"
             still.write_bytes(frame(video, hold.source_ms, ffmpeg))
-            command += ["-loop", "1", "-framerate", str(frame_rate), "-i", str(still)]
+            command += [
+                "-loop",
+                "1",
+                "-framerate",
+                str(frame_rate),
+                "-t",
+                str(selection.duration_ms / 1000),
+                "-i",
+                str(still),
+            ]
             target = f"hold{i}"
             filters.append(
                 f"[{current}][{index}:v]overlay=0:0:enable='gte(t,{hold.start_ms / 1000})*lt(t,{hold.end_ms / 1000})'[{target}]"
@@ -330,7 +339,16 @@ def render_edit(
         for i, card in enumerate(selection.annotations):
             path = work / f"card-{i}.png"
             _card(card, width, height, path, output.parent / "assets")
-            command += ["-loop", "1", "-framerate", str(frame_rate), "-i", str(path)]
+            command += [
+                "-loop",
+                "1",
+                "-framerate",
+                str(frame_rate),
+                "-t",
+                str(selection.duration_ms / 1000),
+                "-i",
+                str(path),
+            ]
             target = f"card{i}"
             filters.append(
                 f"[{current}][{index}:v]overlay=0:0:enable='gte(t,{card.start_ms / 1000})*lt(t,{card.end_ms / 1000})'[{target}]"
@@ -339,7 +357,16 @@ def render_edit(
         if selection.source:
             path = work / "source.png"
             _source_bug(selection.source, width, height, path)
-            command += ["-loop", "1", "-framerate", str(frame_rate), "-i", str(path)]
+            command += [
+                "-loop",
+                "1",
+                "-framerate",
+                str(frame_rate),
+                "-t",
+                str(selection.duration_ms / 1000),
+                "-i",
+                str(path),
+            ]
             filters.append(f"[{current}][{index}:v]overlay=0:0[attributed]")
             current, index = "attributed", index + 1
         partial = output.with_name(output.stem + ".partial.mp4")
