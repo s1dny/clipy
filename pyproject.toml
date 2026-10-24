@@ -29,7 +29,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.pytest.ini_options]
-addopts = "-n 4 --dist loadgroup"
+addopts = "-n 4 --dist loadscope"
 testpaths = ["tests"]
 
 [dependency-groups]

@@ -44,8 +44,8 @@ COPY thumbnails/*.jpg ./thumbnails/
 COPY agent ./agent
 COPY README.md ./
 RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen
-ENV PATH=/app/.venv/bin:$PATH PYTHONUNBUFFERED=1 HOME=/tmp
-CMD ["timeout", "90s", "pytest", "-n", "4", "--dist", "loadgroup", "-q", "--durations=10", "tests"]
+ENV PATH=/app/.venv/bin:$PATH PYTHONUNBUFFERED=1 HOME=/tmp OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
+CMD ["timeout", "90s", "pytest", "-n", "4", "--dist", "loadscope", "-q", "--durations=10", "tests"]
 
 FROM dependencies AS runtime-dependencies
 RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --no-install-project
