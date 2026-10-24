@@ -305,3 +305,36 @@ providers, with real ffmpeg exports and persisted queues. It covers source
 resume, channel isolation, interrupted uploads, private-upload repair,
 analytics collection, comment recovery, daily-agent retries and rollout
 readiness. Pytest uses four workers by default; CI enforces a 60-second limit.
+
+## Editing source excerpts
+
+`process_source` accepts optional `keep`, `annotations`, and `visual_holds` in
+its existing clip selections. `keep` is a chronological list of source-relative
+`{start_ms, end_ms, reason}` ranges within the excerpt's bounding interval.
+FFmpeg joins their video and audio together. Empty `keep` retains the original
+continuous excerpt. Chapters refer to the edited output.
+
+Annotations are brief contextual lower thirds with `{start_ms, end_ms, label,
+text, evidence}` with optional `position` (`top_left`, `top_right`,
+`bottom_left`, `bottom_right`). Their times refer to the **final output**, and labels are
+`Context`, `Recorded`, `Uploaded`, `Question`, or `Reference`. The agent supplies
+accurate text and its provenance. Upload dates must not be presented as recording
+dates. Cards are optional, not a quota. Existing drawings stay central; no
+new diagrams, decorative zooms or automatic subtitles are added.
+
+A `visual_holds` entry is `{start_ms, end_ms, source_ms, reason}`: show an
+inspected original frame while edited audio continues. Output start/end times
+and the original source frame timestamp use milliseconds. This can preserve a
+completed drawing when an internal cut skips its construction.
+
+Use `prepare_source(include_video=true)` to cache source video, then
+`inspect_source_frame` to inspect chosen source timestamps before editing.
+After rendering, `inspect_clip_frame` and `get_edit_report` expose the final
+frames, exact edit timestamps, retained/removed source ranges, evidence and
+technical stream/duration verification. Every edited export stores
+`edit-report.json` beside its MP4. Recovery replays the same saved edits.
+
+Edited uploads are held until the owner approves the rollout preview. Enable
+`CLIPY_EDITED_PUBLISHING_ENABLED=1` on the server and remove the rollout hold in
+the daily agent instructions after approval. Rendering and inspection work
+while publishing is held; existing unedited releases are unaffected.

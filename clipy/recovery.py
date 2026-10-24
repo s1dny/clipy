@@ -116,7 +116,11 @@ def _rebuild(channel: Channel, item: dict) -> None:
         url = f"https://youtube.com/watch?v={source}"
         audio = download_audio(url, folder)
         video = download_video(url, folder)
-        if not cut_clip(
+        from .editing import has_edits, render_edit
+
+        if has_edits(clip):
+            render_edit(video, audio, clip, output, channel.config().ffmpeg)
+        elif not cut_clip(
             video,
             audio,
             clip["start_ms"],

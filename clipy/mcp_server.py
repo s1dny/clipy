@@ -48,6 +48,8 @@ from .channel import PROJECT_ROOT, Channel, all_channels, data_root
 from .clips import ClipSelection
 from .common import extract_video_id, read_json_file, write_json_file
 from .config import PROMPT_KEYS
+from .download import downloaded
+from .editing import frame, media_info, report_for
 from .jobs import JobRunner
 from .logging_config import setup_logging
 from .pipeline import prepare_source as prepare_transcript
@@ -119,6 +121,7 @@ def _queue_view(item: dict) -> dict:
         "thumbnail_pending": item.get("thumbnail_pending", False),
         "processing_status": item.get("processing_status"),
         "repair": item.get("repair"),
+        "edited": item.get("edited", False),
     }
 
 
@@ -427,17 +430,65 @@ async def sample_source(url: str, start_seconds: float, end_seconds: float) -> d
 
 
 @tool(WRITE)
-async def prepare_source(url: str) -> dict:
+async def prepare_source(url: str, include_video: bool = False) -> dict:
     """Download and transcribe an original source in the background. Uses paid
     AssemblyAI transcription; no clip selection, text model calls, or uploads.
-    Cached transcripts are reused. After completion, read get_source_transcript
+    Set include_video=true to cache video for inspect_source_frame before choosing
+    edits; a transcript cannot locate on-screen code or drawings. Cached transcripts are reused. After completion, read get_source_transcript
     through next_offset=null, then choose clips yourself with the channel's
     guidance from get_prompts and submit them to process_source."""
     extract_video_id(url)
     for job in jobs.active(ch().name, "prepare_source"):
         if job["args"]["url"] == url:
+            if include_video and not job["args"].get("include_video"):
+                raise ValueError(
+                    "Transcript preparation is active; let it finish, then prepare with include_video=true."
+                )
             return job
-    return jobs.submit(ch().name, "prepare_source", {"url": url})
+    return jobs.submit(
+        ch().name, "prepare_source", {"url": url, "include_video": include_video}
+    )
+
+
+@tool(READ)
+async def inspect_source_frame(url: str, at_ms: int):
+    """See an actual source frame at a source-relative timestamp. First finish
+    prepare_source(include_video=true). Use to preserve existing drawings, inspect
+    proposed cut boundaries, or choose a visual hold. Never infer pixels from text."""
+    path = downloaded(ch().source_dir(url), "video")
+    if not path:
+        raise ValueError("Prepare the source with include_video=true first.")
+    return Image(
+        data=await _sync(frame, path, at_ms, ch().config().ffmpeg), format="jpeg"
+    )
+
+
+@tool(READ)
+async def inspect_clip_frame(clip_id: str, at_ms: int):
+    """Inspect a rendered clip at a FINAL-output timestamp before scheduling.
+    Check cards are readable and source drawings stay visible; inspect both sides
+    of each cut. No video/audio quality claim follows from one still image."""
+    item = _find_item(_queue(), clip_id)
+    path = Path(item["clip_path"])
+    if not path.is_file():
+        raise ValueError("The local clip has been reclaimed or has not rendered.")
+    return Image(
+        data=await _sync(frame, path, at_ms, ch().config().ffmpeg), format="jpeg"
+    )
+
+
+@tool(READ)
+async def get_edit_report(clip_id: str) -> dict:
+    """Exact final-output edit timestamps, retained/removed source ranges, card
+    text/evidence and technical output measurements. Chapters use final time too."""
+    item = _find_item(_queue(), clip_id)
+    path = Path(item["clip_path"])
+    return {
+        "report": report_for(path),
+        "media": await _sync(media_info, path, ch().config().ffmpeg)
+        if path.is_file()
+        else None,
+    }
 
 
 @tool(READ)
@@ -457,7 +508,17 @@ async def process_source(
     """Render and queue YOUR clips, in the background. First prepare_source and
     read its complete transcript. Supply clips with title, description (your
     accurate summary), source-relative start_ms/end_ms, thumbnail_prompt,
-    optional score and chapters [{start_seconds, title}] relative to the clip.
+    optional score and chapters [{start_seconds, title}] relative to FINAL output.
+    Optional keep=[{start_ms,end_ms,reason}] gives chronological retained SOURCE
+    ranges within the bounding start_ms/end_ms. Omit to keep the full excerpt.
+    Optional annotations=[{start_ms,end_ms,label,text,evidence}] gives brief cards
+    timed in FINAL-output milliseconds; label Context/Recorded/Uploaded/Question/
+    Reference, with optional position top_left/top_right/bottom_left/bottom_right.
+    Choose a position from actual frames so cards preserve faces, code and drawings.
+    Verify dates; distinguish upload from recording. Optional
+    visual_holds=[{start_ms,end_ms,source_ms,reason}] displays an inspected source
+    frame over continuing audio; never invent diagrams. No automatic filler edits.
+    Edited publishing is held until the owner approves the rollout preview.
     Apply the channel's editorial guidance from get_prompts yourself. Use []
     when nothing is worth clipping. No text model is called by the server.
     Saved selections are immutable for safe retries: omit clips to resume them.
@@ -810,7 +871,7 @@ def main() -> None:
         {
             "process_source": _process_job,
             "prepare_source": lambda name, args: prepare_transcript(
-                Channel(name), args["url"]
+                Channel(name), args["url"], args.get("include_video", False)
             ),
             "publish": _publish_job,
             "thumbnails": _thumbnails_job,

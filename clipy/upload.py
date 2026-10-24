@@ -124,6 +124,10 @@ def upload_video(
     from httplib2 import HttpLib2Error
 
     clip_path = Path(item["clip_path"])
+    if item.get("edited") and os.environ.get("CLIPY_EDITED_PUBLISHING_ENABLED") != "1":
+        raise ValueError(
+            "Edited publishing is held until the owner approves the preview. Set CLIPY_EDITED_PUBLISHING_ENABLED=1 after approval."
+        )
     body = {
         "snippet": {
             "title": item["title"],

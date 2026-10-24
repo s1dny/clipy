@@ -113,7 +113,11 @@ def cut_clips(
             logger.info("Cutting clip %s: %s...", i + 1, clip["title"])
             if video is None:
                 raise RuntimeError("Clips need cutting but no video was downloaded.")
-            if not cut_clip(
+            from .editing import has_edits, render_edit
+
+            if has_edits(clip):
+                render_edit(video(), audio, clip, clip_path, ffmpeg_path)
+            elif not cut_clip(
                 video(), audio, clip["start_ms"], clip["end_ms"], clip_path, ffmpeg_path
             ):
                 clip["clip_path"] = None

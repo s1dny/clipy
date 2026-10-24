@@ -2,6 +2,7 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
+from .clips import ClipSelection
 from .common import read_json_file, write_json_file
 
 logger = logging.getLogger(__name__)
@@ -41,7 +42,12 @@ def save_queue(clips: list[dict], queue_file: Path) -> None:
             "score": clip.get("score"),
             "start_ms": clip["start_ms"],
             "end_ms": clip["end_ms"],
-            "duration_seconds": round((clip["end_ms"] - clip["start_ms"]) / 1000),
+            "duration_seconds": round(
+                ClipSelection.model_validate(clip).duration_ms / 1000
+            ),
+            "edited": any(
+                clip.get(key) for key in ("keep", "annotations", "visual_holds")
+            ),
             "status": "pending",
             "created_at": datetime.now(UTC).isoformat(),
         }

@@ -16,7 +16,7 @@ from .transcription import build_sentence_transcript, transcribe_audio
 logger = logging.getLogger(__name__)
 
 
-def prepare_source(channel: Channel, url: str) -> dict:
+def prepare_source(channel: Channel, url: str, include_video: bool = False) -> dict:
     """Prepare the complete timestamped transcript without choosing any clips."""
     source_dir = channel.source_dir(url)
     source_dir.mkdir(parents=True, exist_ok=True)
@@ -33,7 +33,13 @@ def prepare_source(channel: Channel, url: str) -> dict:
         build_sentence_transcript,
         read_json_file(transcript_file),
     )
-    return {"url": url, "sentence_count": len(sentences)}
+    if include_video:
+        download_video(url, source_dir)
+    return {
+        "url": url,
+        "sentence_count": len(sentences),
+        "video_available": bool(downloaded(source_dir, "video")),
+    }
 
 
 def source_transcript(channel: Channel, url: str, offset: int, limit: int) -> dict:

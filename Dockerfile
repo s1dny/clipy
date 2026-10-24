@@ -20,7 +20,7 @@ RUN printf '%s  %s\n' \
 
 FROM python:3.15-slim-trixie AS dependencies
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
+    && apt-get install -y --no-install-recommends ffmpeg ca-certificates fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=uv /uv /usr/local/bin/uv
 # yt-dlp needs a JavaScript runtime to solve YouTube's player challenges.

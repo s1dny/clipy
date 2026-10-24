@@ -201,6 +201,11 @@ def source_info(channel: Channel, url: str, transcript_chars: int) -> dict:
         "title": info.get("title"),
         "channel": info.get("channel"),
         "uploaded": info.get("upload_date"),
+        "recording_date": info.get("release_date") if info.get("was_live") else None,
+        "recording_date_basis": "YouTube live release_date"
+        if info.get("was_live") and info.get("release_date")
+        else None,
+        "was_live": info.get("was_live"),
         "duration_minutes": round((info.get("duration") or 0) / 60),
         "views": info.get("view_count"),
         "description": (info.get("description") or "")[:3000],
