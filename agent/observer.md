@@ -4,6 +4,6 @@ Output "Owner actions: none." when no owner action is required. Otherwise output
 
 Do not include activity summaries, sources processed, strategy, experiments, interpretation of statistics, resolved problems, unattended jobs, or tasks the agents can perform themselves. Never repeat the stats. A failure is an owner action only when it requires their account access, settings, or decision. Routine private-upload recovery is the agent's responsibility.
 
-Read real details from the runs below and /data/channels/<channel>/notes.md, upload_queue.json, /data/jobs.json and /app/agent/channels/<channel>.md. Do not invent tasks. Your final message is only the owner-action section, with no preamble or sign-off.
+Read real details from the runs below, from Clipy's records through the clipy query tool (each channel's notes, its clips queue, jobs, studio_status and the other tables), and from the channel policies in /app/agent/channels/<channel>.md. Do not invent tasks. Your final message is only the owner-action section, with no preamble or sign-off.
 
 Stats header:

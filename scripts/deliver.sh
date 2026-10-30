@@ -27,8 +27,8 @@ export DOCKER_CONFIG="$config_dir" DOCKER_BUILDKIT=1
 budget build-check-image
 docker build --target ci --tag "$ci_image" .
 budget full-e2e
-docker run --rm --cpus=4 --memory=4g --shm-size=512m "$ci_image" \
-  timeout 90s sh -c 'ruff format --check . && ruff check . && pytest -n 4 --dist loadscope -q --durations=10 tests'
+docker run --rm --cpus=4 --memory=4g --shm-size=512m "$ci_image" timeout 90s \
+  sh -c 'for test in /tests/*; do "$test" --test-threads=4 || exit 1; done'
 if [[ ${GITHUB_EVENT_NAME:-} == pull_request ]]; then exit 0; fi
 budget build-runtime
 docker build --target runtime --build-arg "CLIPY_REVISION=$revision" --tag "$image" .

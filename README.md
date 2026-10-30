@@ -14,339 +14,216 @@ hours if it is not monetized yet.
 | [t3gg Clips](https://www.youtube.com/@t3ggclips) (`science`) | Theo only | Watch hours |
 | [Tsoding Clips](https://www.youtube.com/@TsodingClips) (`philosophy`) | Tsoding only | Watch hours |
 
+The `science` and `philosophy` names are kept so the existing YouTube logins
+stay attached to the same channels.
+
 ## What happens each day
 
-Once a day, an AI agent runs each channel in turn. It reads the channel's
+Once a day an AI agent runs each channel in turn. It reads the channel's
 analytics, looks at how recent uploads are doing, and decides what to change.
 It finds new source videos, checks that the right person does most of the
-talking, and starts clipping them. On Mondays it schedules the coming week's
-uploads, one per day. It also rewrites titles and thumbnails on videos that
-are underperforming, and learns which excerpts and titles work from the results.
+talking, and clips them. On Mondays it schedules the coming week's uploads,
+one per day. It rewrites titles and thumbnails on videos that underperform,
+and learns which excerpts and titles work from the results.
 
-The `science` and `philosophy` directory names are retained for account continuity;
-they now run t3gg Clips and Tsoding Clips, respectively.
-Each channel experiments with topics and presentation within its named speaker's material. Thumbnails use that speaker's verified photo.
+The agent has no memory of its own between runs. It reads a notebook at the
+start of each run and updates it at the end: its strategy, the experiments in
+flight, what it learned from the numbers, and candidate sources to clip next.
 
-The agent has no memory of its own between runs. Everything it knows comes
-from a notebook it reads at the start of each run and updates at the end: its
-strategy, the experiments it is running, what it has learned from the
-numbers, and a list of candidate source videos to clip next.
-
-After all channels have run, a second agent reads what each one did and
-writes a single report, which is sent to the owner over Matrix.
+After every channel has run, a second agent reads what each one did and
+writes the owner's actions, which are sent over Matrix in one message under a
+header of each channel's earnings, views and subscribers.
 
 ## How it is built
 
-**The agent** is Codex CLI, signed in with a ChatGPT subscription rather than
-an API key, and started by [`agent/run.sh`](agent/run.sh). Its instructions
-are [`agent/prompt.md`](agent/prompt.md), the routine every channel follows,
-plus a short policy file for the channel in [`agent/channels/`](agent/channels).
-The policy says what the channel optimises for, who may appear in it, where
-to look for sources, and what the owner has to do by hand. These rules live
-only in the prompts; nothing in the code enforces them, so changing how a
-channel behaves means editing its policy file. The agent can search the web
-and run shell commands inside its container.
+Clipy is one Rust binary, `clipy`, with a subcommand for each part.
 
-**The MCP server** (`clipy-mcp`) gives the agent its tools and does the actual
-work. Each channel in `config.toml` gets its own endpoint at
+**The agent** is Claude Code, run headless (`claude -p`) on the owner's
+Claude subscription by `clipy agent`. Its instructions are
+[`agent/prompt.md`](agent/prompt.md), the routine every channel follows, plus
+a short policy for the channel in [`agent/channels/`](agent/channels): what
+it optimises for, who may appear, where to look for sources, and what the
+owner has to do by hand. These rules live only in the prompts; changing how a
+channel behaves means editing its policy file. The agent can search the web,
+read images and run shell commands in its container.
+
+**The server** (`clipy serve`) gives the agent its tools as MCP and does the
+actual work. Each channel in `config.toml` has its own endpoint at
 `/mcp/<channel>`, so an agent can only touch its own channel. The tools cover:
 
-- general Google API access driven by searchable official discovery specs,
-  plus raw dated counter snapshots and Studio observations
+- general Google API access driven by Google's published discovery documents,
+  plus raw dated counter snapshots and Studio readings
 - searching for source videos and checking who speaks in them
-- starting clipping and upload jobs, which run in the background
-- editing queued clips, rendering artwork, and raw API requests for live videos
-- reading and changing reusable editorial guidance
+- preparing and rendering sources, and publishing and repairing uploads, as
+  persisted background jobs
+- editing queued clips, rendering artwork, and Studio requests for live videos
+- reading and changing the channel's editorial guidance
 - reading and writing the notebook
 
-The API interface has no per-endpoint wrappers or hand-written metric catalog.
-`google_api_spec` searches Google's published discovery documents bundled with
-the installed client and returns exact subtrees by JSON Pointer.
-`google_api_read` and `google_api_write` invoke the named service method with
-its original parameters and return the service response. Read/write separation
-comes from each method's published HTTP verb. Existing OAuth scopes are kept.
-Media uploads are restricted to files inside the current channel's directory.
-Every mutation records intent, measured observations, and outcome under
-`channels/<channel>/api-writes/`; failed writes remain unconfirmed until Codex
-checks the remote state. No write retries happen automatically.
+The observer gets `/observer`: one read-only SQL tool over everything Clipy
+keeps.
 
-**Codex owns the editorial workflow end to end.** It starts `prepare_source`
-to download and transcribe a source with AssemblyAI, then reads the complete
-speaker-labelled, timestamped transcript through `get_source_transcript`
-(following every page to the end). The same Codex session that knows the
-channel strategy and analytics chooses the excerpts and writes their titles,
-descriptions, chapters and thumbnail concepts. It submits those choices to
-`process_source`; the server only validates the render contract, cuts with
-ffmpeg, draws illustrations with the image service and adds the clips to the
-queue. No transcript or clip text is sent to another text model.
+The API interface has no per-endpoint wrappers or hand-written metric
+catalogue. `google_api_spec` searches the official discovery document and
+returns exact subtrees by JSON Pointer. `google_api_read` and
+`google_api_write` call the named method with its own parameters and return
+the raw response; read/write separation comes from each method's HTTP verb.
+Media uploads are restricted to the channel's own clips and artwork. Every
+mutation is journaled before it is sent; a failed write stays unconfirmed
+until the agent checks the remote state, and nothing retries writes.
 
-Preparation and rendering run as persisted background jobs. Codex records the
-unfinished stage in its notebook and resumes it next run. Rendering retries
-reuse saved selections; submitting a different selection over existing exports
-is rejected to preserve queue identity. Empty selections explicitly record a
-source with no worthwhile clips. Jobs from all channels run one at a time.
+**The agent owns the editorial work.** It starts `prepare_source` to download
+and transcribe a source with AssemblyAI, reads the complete speaker-labelled,
+timestamped transcript with `get_source_transcript`, and chooses the excerpts
+with their titles, descriptions, chapters, edits and thumbnail concepts. It
+submits them to `process_source`; the server only validates the render
+contract, renders with ffmpeg, draws illustrations with the image model and
+queues the clips. No transcript or clip text goes to another text model.
+Transcripts are shared between channels, so a source is only paid for once.
 
-For manual work, use `clipy prepare CHANNEL URL`, read all pages with
-`clipy transcript CHANNEL URL --offset N`, then submit a JSON array matching
-the MCP `process_source` schema with `clipy process CHANNEL URL --clips FILE`.
-Omit `--clips` only to resume saved selections. Non-fixed channels also need
-`--speaker`. These commands do not choose excerpts for you.
+Saved selections are immutable: retrying a render reuses them, and
+submitting different ones over existing exports is refused. An empty
+selection records a source with nothing worth clipping. Jobs from every
+channel run one at a time and survive restarts: preparation and rendering
+resume, while an interrupted upload is failed so it is never duplicated.
 
-The original-video link includes the clip's start timestamp.
-
-Clips are fully re-encoded with aligned audio and video timelines. This avoids
-the frame repetition and audio drift possible when splicing copied H.264
-onto a re-encoded opening segment. Exports use one continuous encode with aligned timelines.
+**Rendering** is one continuous ffmpeg encode with aligned audio and video.
+The agent may keep chosen source ranges, add image-and-caption cards (square
+corners, monospace type, an optional real image with its credit) and hold an
+inspected source frame over continuing audio. A verified stream date and the
+source's name stay on screen throughout. Every release is at least eight
+minutes after cuts, has no em dashes, and its description carries a literal
+`Source:` line with the original link. `inspect_source_frame`,
+`inspect_clip_frame` and `get_edit_report` let the agent check its edits.
 
 **Thumbnails** have a picture on the left and, on the white right side, an
-illustration of the clip's main idea made by an image model. For Jonathan
-Blow the picture is a fixed template, `thumbnails/blow.jpg`. For the other
-channels it is a headshot of the speaker, which the agent finds on the web,
-crops to a portrait and saves under `headshots/` in the data directory. All
-channels share the same headshots.
+illustration of the clip's idea drawn by an image model through OpenRouter.
+For Blow, Casey and Hotz the picture is a fixed template in `thumbnails/`;
+the other channels use a headshot of the speaker, which the agent finds,
+crops and saves under `headshots/` in the data directory.
 
-**The daily report** is one Matrix message covering every channel. Its header
-uses channel-level YouTube Studio internal API daily series collected hourly,
-showing the latest available reporting day and the last 30 days. Views and
-subscriber changes can reach yesterday while earnings are still processing;
-each metric keeps its own date. Missing or processing data stays unavailable,
-and channel readings more than two hours old are not shown as fresh totals.
-These are YouTube reporting dates, with estimates explicitly labelled.
-Status earnings are requested from YouTube in AUD and labelled A$; older USD
-channel snapshots stay unavailable until the next successful collection.
-Below the numbers, the observer writes only tasks the owner must perform,
-or “Owner actions: none.” Run footers show input and output tokens without
-cached or reasoning token counts.
+**Studio.** `clipy studio` runs in the private browser pod. Every hour it
+reads Studio's analytics directly over HTTP with the signed-in session's
+cookies: daily channel series in AUD for the report header and since-published
+readings for recent and experimented-on videos. It refreshes its client
+context, then reads the browser's cookie jar once, on an authentication
+failure, and saves the jar only after an authenticated, channel-checked
+response. It also executes the agent's `studio_api_request`s through
+Studio's own signed-in request service in a tab of its own, so Google's
+client handles session risk and attestation. That is how the bot enables ads
+on Jonathan Blow's videos and verifies them. Requests are journaled and an
+unconfirmed one is never replayed.
 
-George Hotz Clips uses the supplied fixed photo template, focuses on AI,
-programming and technology, and launches by filling seven future daily slots
-before joining the usual Monday batching routine. It runs alongside the
-existing channels.
+Upload success is distinct from processing success. Clipy keeps each MP4
+until YouTube confirms it processed, and synchronises the queue with
+YouTube's calendar hourly. Failed or stalled private uploads are repaired by
+re-encoding the excerpt, uploading a private replacement, confirming it
+processed, transferring the schedule and deleting the broken copy. Public,
+watched, working and rejected videos are never replaced.
 
-Engagement and revenue are queried separately, with their own freshness
-dates. Hourly YouTube Data API snapshots provide current views, likes,
-comments and rounded subscriber counts. Codex chooses comparison windows
-and computes changes when baselines exist. `read_observations` exposes the
-raw dated snapshots separately from delayed watch hours, revenue, impressions and CTR.
+## Data
 
-Clipy collects fresh Studio analytics hourly with `clipy studio-collect`
-using direct authenticated `yta_web/get_cards` requests. It loads cookies from
-the private session checkpoint, bootstraps the current Studio client version
-and channel delegation through HTTP, and regenerates authentication hashes
-for each request. Per-video readings request Since published and USD; channel
-daily totals for status reports request AUD, retaining
-unrounded totals, provider estimates, missing values and failures. The agent
-reads these results through `read_observations`.
+Everything Clipy keeps is under the data directory (`/srv/clipy` on
+azalab-0):
 
-Chromium is used for comment pinning, interactive Google sign-in and cookie recovery. Analytics collection
-never opens analytics pages or reads DOM cards. On authentication failure it
-refreshes the HTTP client context, then reads the browser's live cookie jar
-once if necessary. Only a successfully authenticated, channel-checked response
-can update the owner-only cookie checkpoint. Response cookie updates persist
-between runs, so analytics collection also works while the browser is unavailable.
-Google can still require interactive sign-in if it revokes the session.
-
-The browser and collector run on azalab-0 without a Mac or Codex calls. Their
-deployment belongs in the homelab repo; the desktop is reached only through
-SSH/Kubernetes forwarding and its debugging port remains pod-local.
-`CLIPY_STUDIO_SESSION` points to the approved private-volume checkpoint. It
-contains account-access credentials, not passwords: keep it out of logs,
-Git and ordinary application data. Public browser user-agent metadata is saved
-alongside it; client context and delegation variables are refreshed in memory.
-
-Upload success is distinct from processing success. Clipy retains each MP4
-until YouTube confirms successful processing, and synchronises queue dates
-with YouTube's current calendar. Agents can inspect and repair failed or
-stalled private uploads on any day. Recovery fully re-encodes the excerpt,
-uploads a private replacement, confirms processing, transfers the future
-schedule and then deletes the broken copy. It refuses public/watched videos,
-working uploads and policy rejections; retries resume the same replacement.
-New release batches still happen on Mondays.
-
-## The one manual step
-
-The bot checks and enables Jonathan Blow video ads through authenticated Studio
-requests, verifies the saved switch and effective monetization state, and keeps
-existing schedules and ad placements. Google can require the owner to complete
-a sign-in challenge; the report names affected videos and the exact blocker.
-The `studio_api_request` tool sends durable requests over the shared data volume
-to a worker in the private browser pod. The worker uses Studio's own signed-in
-request service, which generates session-risk and attestation data normally.
-No proof tokens or browser debugging ports are exposed to the agent. It acts
-only on the requested channel, closes only its own page, and never replays
-requests left unconfirmed by a crash or timeout. Hourly analytics collection
-continues using direct HTTP.
-
-New agreements and unsupported advertiser-suitability claims are never submitted
-automatically. The daily report raises only issues requiring account access or
-an owner decision.
-The other channels need no per-upload monetization step.
+- `clipy.db`: SQLite with the notebooks, queue, selections, transcripts,
+  jobs, API and Studio journals, counter snapshots and Studio readings
+- `channels/<channel>/`: the YouTube token, rendered clips and artwork
+- `sources/<video id>/`: downloaded source media, removed once rendered
+- `headshots/`: speaker photos shared by every channel
 
 ## Production
 
-Delivery uses one host job with a cached Linux test image. It runs the full
-E2E suite with four workers, sharing expensive media fixtures on one worker,
-then builds and publishes the production image. System packages, Python
-dependencies and Chromium are cached separately from source edits.
-The job's 300-second budget includes runner queue time, tests, image build,
-publishing and readiness of the app, site, collector, comment worker and
-agent template. It prints `COMMIT_TO_READY_SECONDS` only after live proof.
-`/releasez` exposes only the commit and aggregate readiness, using a
-namespace-scoped in-cluster identity. CI receives no Kubernetes credential.
-Clipy has its own ten-second Flux image automation, with registry webhooks
-and a thirty-second registry-scan fallback.
+Forgejo CI runs one job on azalab-0 (`scripts/deliver.sh`) within a
+300-second budget: it builds the test image with a persistent Cargo cache,
+runs the E2E suite, then builds and pushes `git.aza.network/aza/clipy` from
+every `main` commit. Flux deploys it to azalab-0, and CI waits for
+`/releasez` to report that the server, site, Studio worker and agent all run
+the commit. The manifests are in the homelab repo under
+`flux/clusters/azalab-0/manifests/apps/clipy`.
 
-CI builds the image `ghcr.io/s1dny/clipy` from every `main` commit whose
-checks pass, and Flux deploys it to azalab-0. The Kubernetes manifests are in
-the homelab repo under `flux/clusters/azalab-0/manifests/apps/clipy`.
-
-The `clipy` Deployment serves the MCP server inside the cluster at
-`http://clipy.clipy.svc:8000/mcp/<channel>`. The `clipy-agent` CronJob runs
-the agents every day at 04:00 Sydney time.
-
-Everything the bot keeps is on the host under `/srv/clipy`:
-
-- `channels/<channel>/`: each channel's YouTube login, clip queue, notebook
-  (`notes.md`), prompt overrides and working files
-- `headshots/`: speaker photos shared by all channels
-- `codex/`: the agent's ChatGPT login
-- the background job list and the Matrix room
-
-To run the agents now instead of waiting for the schedule:
+The `clipy-agent` CronJob runs the agents every day at 04:00 Sydney time. To
+run them now:
 
 ```bash
 ssh azalab-0 kubectl -n clipy create job --from=cronjob/clipy-agent agent-manual-$(date +%s)
 ```
 
-Its output is in `kubectl -n clipy logs job/<name>`.
-
-The agent needs to be signed in to ChatGPT once, and again if the login ever
-expires. This uses a device code, so the server's session stays separate from
-your own:
-
-```bash
-ssh -t azalab-0 "kubectl -n clipy exec -it deploy/clipy -- sh -c 'mkdir -p /data/codex && CODEX_HOME=/data/codex exec codex login --device-auth'"
-```
+The agent signs in with a long-lived token from `claude setup-token`, kept
+as `CLAUDE_CODE_OAUTH_TOKEN` in the `clipy-claude` secret. Replace it the
+same way if it ever expires.
 
 ## Configuration
 
-`config.toml` holds every setting that is not a secret: which transcription and image models to use,
-and for each channel its handle, YouTube category, speaker, thumbnail
-template and prompt templates. Settings under `[defaults]` apply to every
-channel, and `[channels.<name>]` overrides them. A channel with a `speaker` is
-about that one person. A channel without a `thumbnail_template` uses speaker
-headshots. Start by copying `config.toml.example`.
-
-The agent can change its editorial guidance and the image/description templates while it runs. Its versions
-are saved in the channel's `prompt_overrides.json` and take priority over
-`config.toml`.
+`config.toml` holds every setting that is not a secret: the image and speech
+models, and for each channel its handle, YouTube category, speaker,
+thumbnail template and prompt templates. `[defaults]` applies to every
+channel and `[channels.<name>]` overrides it; the agent's own prompt edits
+win over both. Start from `config.toml.example`.
 
 | Variable | Used by | Meaning |
 |---|---|---|
-| `ASSEMBLYAI_API_KEY` | pipeline | Transcription |
-| `OPENROUTER_API_KEY` | pipeline | Thumbnail illustrations only |
-| `CLIPY_MCP_TOKEN` | server, agent | Password for the MCP server, at least 32 characters |
-| `CLIPY_DATA_DIR` | everything | Where channel data, headshots and bot state live (`/data` in the image) |
-| `CLIPY_CONFIG` | server, CLI | Path to `config.toml` (defaults to the one in the repo) |
+| `CLIPY_DATA_DIR` | everything | The data directory (`/data` in the image) |
+| `CLIPY_CONFIG` | everything | Path to `config.toml` |
+| `CLIPY_MCP_TOKEN` | server, agent | Bearer token for the server, at least 32 characters |
+| `ASSEMBLYAI_API_KEY` | server | Transcription |
+| `OPENROUTER_API_KEY` | server | Thumbnail illustrations |
 | `CLIPY_TIMEZONE` | server | Timezone for notebook entries (default `Australia/Sydney`) |
-| `YOUTUBE_CLIENT_SECRETS` | `clipy auth` | Google OAuth client file (default `client_secrets.json`) |
-| `CODEX_MODEL`, `CODEX_REASONING` | agent | Model and reasoning effort (default `gpt-6.1-sol`, `medium`) |
-| `CLIPY_AGENT_NOTE` | agent | A one-off instruction added to every channel's prompt for a manual run |
-| `CLIPY_QUOTA_RETRY_SECONDS` | agent | Delay before retrying a Codex usage-limit failure that ran no tools (default 900 seconds, at most three attempts) |
-| `MATRIX_ACCESS_TOKEN` | agent | The report bot's Matrix token; without it no report is sent |
-| `MATRIX_NOTIFY_USER` | agent | Who the bot invites to its report room the first time |
+| `CLIPY_STUDIO_SESSION` | studio | The private cookie checkpoint |
+| `CLIPY_STUDIO_CDP` | studio | The browser's DevTools endpoint (default `http://127.0.0.1:9222`) |
+| `CLAUDE_CODE_OAUTH_TOKEN` | agent | The Claude subscription login |
+| `CLAUDE_MODEL`, `CLAUDE_EFFORT` | agent | Model (default `opus`) and optional effort level |
+| `CLIPY_SERVER` | agent | The server (default `http://clipy.clipy.svc:8000`) |
+| `CLIPY_AGENT_NOTE` | agent | A one-off instruction added to every channel's prompt |
+| `CLIPY_QUOTA_RETRY_SECONDS` | agent | Wait before retrying a usage limit hit before any tool ran (default 900, three attempts) |
+| `MATRIX_ACCESS_TOKEN`, `MATRIX_ROOM` | agent | The report bot's token and room; without a token no report is sent |
 | `MATRIX_HOMESERVER` | agent | Matrix homeserver URL (defaults to the one in the cluster) |
-
-For local use, put secrets in `.env` (see `.env.example`).
+| `YOUTUBE_CLIENT_SECRETS` | `clipy auth` | Google OAuth client file (default `client_secrets.json`) |
 
 ### Connecting a YouTube channel
 
-In the Google Cloud project, enable the YouTube Data API v3, the YouTube
-Analytics API and the YouTube Reporting API. Create an OAuth client of type
-Desktop app and save it as `client_secrets.json`. Keep the OAuth app set to
-"In production", because in "Testing" its logins expire after 7 days.
-
-Then sign each channel in:
+Enable the YouTube Data, Analytics and Reporting APIs in the Google Cloud
+project, create a Desktop OAuth client saved as `client_secrets.json`, and
+keep the app "In production" (testing logins expire after 7 days). Then:
 
 ```bash
 clipy auth <channel>
 ```
 
-This prints a Google link. Open it on the same machine, pick the channel's
-brand account and allow access. The login is saved to
-`channels/<channel>/.youtube_token.json`, but only if it belongs to the
-channel's `handle`. Copy it to the server with:
+Open the printed link, pick the channel's brand account and allow access.
+The token is saved to `channels/<channel>/youtube-token.json`, only if it
+belongs to the channel's `handle`. Copy it to the server with:
 
 ```bash
-ssh azalab-0 "kubectl -n clipy exec -i deploy/clipy -- sh -c 'mkdir -p /data/channels/<channel> && cat > /data/channels/<channel>/.youtube_token.json && chmod 600 /data/channels/<channel>/.youtube_token.json'" < channels/<channel>/.youtube_token.json
+ssh azalab-0 "kubectl -n clipy exec -i deploy/clipy -- sh -c 'cat > /data/channels/<channel>/youtube-token.json && chmod 600 /data/channels/<channel>/youtube-token.json'" < channels/<channel>/youtube-token.json
 ```
 
 ## Running it locally
 
-Clipy needs Python 3.15 and ffmpeg. Install it with `uv sync`, or with
-`uv tool install --editable .` to get a `clipy` command. To clip one video by
-hand:
+Clipy needs Rust, ffmpeg and yt-dlp. For manual work:
 
 ```bash
-clipy process <channel> <youtube-url> [--speaker "Full Name"]
+cargo install --path .
+clipy prepare <youtube-url>
+clipy transcript <youtube-url> --offset 0
+clipy process <channel> <youtube-url> --clips selections.json [--speaker "Full Name"]
 ```
+
+`--clips` is a JSON array matching `process_source`'s schema; omit it to
+resume saved selections. These commands never choose excerpts for you.
 
 ## Development
 
 ```bash
-uv run ruff format .
-uv run ruff check .
-uv run playwright install chromium
-uv run pytest
+cargo fmt
+cargo clippy --all-targets
+cargo test --release
 ```
 
-The suite runs complete CLI, MCP and browser workflows against local HTTP
-providers, with real ffmpeg exports and persisted queues. It covers source
-resume, channel isolation, interrupted uploads, private-upload repair,
-analytics collection, comment recovery, daily-agent retries and rollout
-readiness. Pytest uses four workers by default; CI enforces a 60-second limit.
-
-## Editing source excerpts
-
-`process_source` accepts optional `keep`, `annotations`, and `visual_holds` in
-its existing clip selections. `keep` is a chronological list of source-relative
-`{start_ms, end_ms, reason}` ranges within the excerpt's bounding interval.
-FFmpeg joins their video and audio together. Empty `keep` retains the original
-continuous excerpt. Chapters refer to the edited output.
-
-Annotations are brief contextual lower thirds with `{start_ms, end_ms, label,
-text, evidence}` with optional `position` (`top_left`, `top_right`,
-`bottom_left`, `bottom_right`). Their times refer to the **final output**, and labels are
-`Context`, `Recorded`, `Uploaded`, `Question`, or `Reference`. The agent supplies
-accurate text and its provenance. Upload dates must not be presented as recording
-dates. Cards are optional, not a quota. Existing drawings stay central; no
-new diagrams, decorative zooms or automatic subtitles are added.
-
-A `visual_holds` entry is `{start_ms, end_ms, source_ms, reason}`: show an
-inspected original frame while edited audio continues. Output start/end times
-and the original source frame timestamp use milliseconds. This can preserve a
-completed drawing when an internal cut skips its construction.
-
-Use `prepare_source(include_video=true)` to cache source video, then
-`inspect_source_frame` to inspect chosen source timestamps before editing.
-After rendering, `inspect_clip_frame` and `get_edit_report` expose the final
-frames, exact edit timestamps, retained/removed source ranges, evidence and
-technical stream/duration verification. Every edited export stores
-`edit-report.json` beside its MP4. Recovery replays the same saved edits.
-
-The owner approved the square, monospace image-and-caption format on 24 October
-2026. Every new video uses this format. Production enables
-`CLIPY_EDITED_PUBLISHING_ENABLED=1`; the default remains off in other environments
-until explicitly enabled. Existing videos are not re-edited.
-
-Every release must be at least eight minutes after cuts. Source attribution
-contains a verified stream date (not an upload date), source name and evidence.
-The source and date remain on screen throughout, and every description contains
-a literal `Source:` line with its original link. Em dashes and visible category
-labels such as Reference are forbidden. Preserve worthwhile asides and anecdotes.
-The owner selected image-and-caption cards: square corners, monospace type, optional relevant real images, and room for several useful sentences. Category labels are never printed.
-
-Card images use optional `image_url` (HTTPS) and `image_credit` fields. The
-renderer keeps the exact downloaded image under the clip's `assets/` directory
-for reproducible retries and recovery; descriptions include the image credits.
-Use `edit_video` to add or revise attribution and edits on pending videos.
+The suite runs the real binary end to end: CLI, MCP and browser workflows,
+real ffmpeg exports, SQLite and HTTP clients. Google, Studio, OpenRouter and
+Kubernetes are local providers behind a TLS-intercepting proxy, so the app
+uses its production URLs unchanged. It covers rendering and resume, channel
+isolation, interrupted uploads, private-upload repair, analytics collection,
+Studio requests through a real Chromium, daily-agent retries and release
+readiness. The Studio test needs Chrome or Chromium (`CLIPY_TEST_CHROME`).

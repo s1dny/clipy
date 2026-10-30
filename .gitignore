@@ -1,7 +1,9 @@
-config.toml
+/target
+/config.toml
+/client_secrets.json
+/clipy.db*
 /channels/
-*.json
+/sources/
+/headshots/
 *.env
 .DS_Store
-__pycache__/
-.matrix-token
