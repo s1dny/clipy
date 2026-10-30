@@ -254,12 +254,7 @@ fn setup(monetized: bool) -> (tokio::runtime::Runtime, Providers, Root, Arc<Fixt
         })
     };
     let providers = providers(&runtime, handler);
-    let root = Root::new(
-        CONFIG
-            .split("[channels.science]")
-            .next()
-            .unwrap(),
-    );
+    let root = Root::new(CONFIG.split("[channels.science]").next().unwrap());
     root.token("blow");
     // Yesterday's counters, as the hourly sampler would have recorded them.
     let observed = (now - jiff::SignedDuration::from_hours(24)).to_string();

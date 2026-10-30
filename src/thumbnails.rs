@@ -46,10 +46,7 @@ pub fn headshot_path(app: &App, speaker: &str) -> Result<PathBuf> {
 pub fn headshot_panel(app: &App, speaker: &str) -> Result<RgbImage> {
     let path = headshot_path(app, speaker)?;
     if !path.exists() {
-        bail!(
-            "No headshot of {speaker}: find a photo, crop it to a 2:3 portrait of the head and shoulders, and save it as {}.",
-            path.display()
-        );
+        bail!("No headshot of {speaker}: find a photo and save it with the headshot tool.");
     }
     let image = open_oriented(&path)?.to_rgb8();
     let (w, h) = image.dimensions();
@@ -69,6 +66,72 @@ pub fn headshot_panel(app: &App, speaker: &str) -> Result<RgbImage> {
         PANEL.1,
         FilterType::Lanczos3,
     ))
+}
+
+/// A crop box as fractions of the image's width and height.
+#[derive(Debug, Clone, Copy, serde::Deserialize, schemars::JsonSchema)]
+pub struct Crop {
+    pub left: f64,
+    pub top: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+/// Save a speaker's headshot from a photo, optionally cropped first. The
+/// thumbnail panel takes the widest 2:3 portrait of it, head near the top.
+pub async fn save_headshot(
+    app: &App,
+    speaker: &str,
+    url: &str,
+    crop: Option<Crop>,
+) -> Result<serde_json::Value> {
+    let path = headshot_path(app, speaker)?;
+    let image = crate::cards::fetch_image(&app.http, url).await?.to_rgb8();
+    let (w, h) = image.dimensions();
+    let image = match crop {
+        None => image,
+        Some(c) => {
+            let inside = |start: f64, size: f64| {
+                (0.0..1.0).contains(&start) && size > 0.0 && start + size <= 1.0 + 1e-9
+            };
+            if !inside(c.left, c.width) || !inside(c.top, c.height) {
+                bail!("The crop box must lie inside the image: fractions from 0 to 1.");
+            }
+            let x = (c.left * w as f64).round() as u32;
+            let y = (c.top * h as f64).round() as u32;
+            let cw = ((c.width * w as f64).round() as u32).min(w - x);
+            let ch = ((c.height * h as f64).round() as u32).min(h - y);
+            image::imageops::crop_imm(&image, x, y, cw, ch).to_image()
+        }
+    };
+    let (cw, ch) = image.dimensions();
+    let portrait_width = cw.min(ch * PANEL.0 / PANEL.1);
+    if portrait_width < 480 {
+        bail!(
+            "The headshot would be {cw}x{ch}; its 2:3 portrait must be at least 480x720. Use a larger photo or a larger crop."
+        );
+    }
+    let target = path.clone();
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let mut bytes = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 95).encode_image(&image)?;
+        crate::app::write_atomic(&target, &bytes, None)
+    })
+    .await??;
+    Ok(serde_json::json!({
+        "speaker": speaker,
+        "photo": url,
+        "photo_size": [w, h],
+        "saved_size": [cw, ch],
+    }))
+}
+
+/// The thumbnail panel for a speaker, as a JPEG.
+pub fn panel_jpeg(app: &App, speaker: &str) -> Result<Vec<u8>> {
+    let panel = headshot_panel(app, speaker)?;
+    let mut bytes = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 90).encode_image(&panel)?;
+    Ok(bytes)
 }
 
 fn open_oriented(path: &Path) -> Result<DynamicImage> {

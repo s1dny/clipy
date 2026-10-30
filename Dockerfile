@@ -35,11 +35,11 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
        | xargs -I{} cp {} /out/tests/
 
 # Everything Clipy and its agent run with: ffmpeg, yt-dlp with a JavaScript
-# runtime for YouTube's challenges, Claude Code, and general tools the agent
-# uses for headshots (Python with Pillow, curl).
+# runtime for YouTube's challenges, Claude Code, and curl and jq for the
+# agent's own research.
 FROM debian:trixie-slim AS base
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg ca-certificates curl jq python3 python3-pil \
+    && apt-get install -y --no-install-recommends ffmpeg ca-certificates curl jq \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=deno /deno /usr/local/bin/deno
 COPY --from=tools /out/ /usr/local/bin/

@@ -99,8 +99,10 @@ minutes after cuts, has no em dashes, and its description carries a literal
 **Thumbnails** have a picture on the left and, on the white right side, an
 illustration of the clip's idea drawn by an image model through OpenRouter.
 For Blow, Casey and Hotz the picture is a fixed template in `thumbnails/`;
-the other channels use a headshot of the speaker, which the agent finds,
-crops and saves under `headshots/` in the data directory.
+the other channels use a headshot of the speaker: the agent finds a photo
+and saves it, cropped, with the `headshot` tool, which shows it the exact
+thumbnail panel. Headshots live under `headshots/` and are shared by every
+channel.
 
 **Studio.** `clipy studio` runs in the private browser pod. Every hour it
 reads Studio's analytics directly over HTTP with the signed-in session's

@@ -293,6 +293,18 @@ pub struct DrawArgs {
 }
 
 #[derive(Deserialize, JsonSchema)]
+pub struct HeadshotArgs {
+    /// The speaker's full common name, written the same way every time.
+    speaker: String,
+    /// An HTTPS photo of the speaker to save; omit to view the current headshot.
+    #[serde(default)]
+    image_url: Option<String>,
+    /// Optional crop of the photo, as fractions (0 to 1) of its width and height.
+    #[serde(default)]
+    crop: Option<crate::thumbnails::Crop>,
+}
+
+#[derive(Deserialize, JsonSchema)]
 pub struct PromptArgs {
     #[serde(default)]
     editorial_guidance: Option<String>,
@@ -1187,6 +1199,46 @@ impl Channel {
             }
             .await,
         )
+    }
+
+    /// A speaker's headshot, shared by every channel whose thumbnails show the
+    /// speaker on the left. With image_url, save that photo (optionally cropped
+    /// first) as the headshot; without it, show the current one. Either way it
+    /// returns the exact 2:3 thumbnail panel: the widest portrait of the
+    /// headshot, centred across and kept near the top. Check the face is
+    /// sharp, centred, not cut off and fills the upper half; otherwise save
+    /// again with a better crop or photo. Saving replaces the old headshot for
+    /// future artwork only; redraw thumbnails that should use it.
+    #[tool(annotations(
+        read_only_hint = false,
+        destructive_hint = false,
+        open_world_hint = true
+    ))]
+    async fn headshot(&self, Parameters(args): Parameters<HeadshotArgs>) -> CallToolResult {
+        let saved = match &args.image_url {
+            Some(url) => {
+                match crate::thumbnails::save_headshot(&self.app, &args.speaker, url, args.crop)
+                    .await
+                {
+                    Ok(info) => Some(info),
+                    Err(error) => return reply(Err(error)),
+                }
+            }
+            None => None,
+        };
+        match crate::thumbnails::panel_jpeg(&self.app, &args.speaker) {
+            Ok(jpeg) => {
+                let mut content = vec![ContentBlock::image(
+                    base64::engine::general_purpose::STANDARD.encode(jpeg),
+                    "image/jpeg",
+                )];
+                if let Some(info) = saved {
+                    content.insert(0, ContentBlock::text(info.to_string()));
+                }
+                CallToolResult::success(content)
+            }
+            Err(error) => reply(Err(error)),
+        }
     }
 
     /// Current guidance: editorial_guidance (guidance YOU apply when reading

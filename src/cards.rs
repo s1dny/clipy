@@ -218,6 +218,31 @@ pub fn source_bug(source: &SourceAttribution, width: u32, height: u32, path: &Pa
     Ok(())
 }
 
+/// Download an image (at most 10 MB) with its EXIF orientation applied.
+pub async fn fetch_image(http: &reqwest::Client, url: &str) -> Result<DynamicImage> {
+    if !url.starts_with("https://") {
+        bail!("Images must use HTTPS URLs.");
+    }
+    let mut response = http.get(url).send().await?.error_for_status()?;
+    let mut data = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        data.extend_from_slice(&chunk);
+        if data.len() > MAX_IMAGE_BYTES {
+            bail!("The image exceeds 10 MB.");
+        }
+    }
+    tokio::task::spawn_blocking(move || -> Result<DynamicImage> {
+        let mut decoder = ImageReader::new(std::io::Cursor::new(data))
+            .with_guessed_format()?
+            .into_decoder()?;
+        let orientation = decoder.orientation()?;
+        let mut image = DynamicImage::from_decoder(decoder)?;
+        image.apply_orientation(orientation);
+        Ok(image)
+    })
+    .await?
+}
+
 /// Download a card image once and keep the exact reviewed asset, so retries
 /// and upload recovery render the same pixels.
 pub async fn image_asset(http: &reqwest::Client, url: &str, assets: &Path) -> Result<DynamicImage> {
@@ -227,22 +252,9 @@ pub async fn image_asset(http: &reqwest::Client, url: &str, assets: &Path) -> Re
         hex::encode(sha2::Sha256::digest(url.as_bytes()))
     ));
     if !path.exists() {
-        let mut response = http.get(url).send().await?.error_for_status()?;
-        let mut data = Vec::new();
-        while let Some(chunk) = response.chunk().await? {
-            data.extend_from_slice(&chunk);
-            if data.len() > MAX_IMAGE_BYTES {
-                bail!("Card image exceeds 10 MB.");
-            }
-        }
+        let image = fetch_image(http, url).await?;
         let target = path.clone();
         tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut decoder = ImageReader::new(std::io::Cursor::new(data))
-                .with_guessed_format()?
-                .into_decoder()?;
-            let orientation = decoder.orientation()?;
-            let mut image = DynamicImage::from_decoder(decoder)?;
-            image.apply_orientation(orientation);
             let mut image = DynamicImage::ImageRgb8(image.to_rgb8());
             if image.width() > 1920 || image.height() > 1920 {
                 image = image.thumbnail(1920, 1920);

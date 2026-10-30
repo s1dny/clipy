@@ -7,12 +7,30 @@ use std::sync::Arc;
 use serde_json::json;
 use support::*;
 
+const GREEN: [u8; 3] = [30, 200, 30];
+
+/// A 1600x900 photo: the speaker in red on the left, green on the right.
+fn photo() -> Vec<u8> {
+    let image = image::RgbImage::from_fn(1600, 900, |x, _| {
+        image::Rgb(if x < 800 { HEADSHOT_RED } else { GREEN })
+    });
+    let mut png = Vec::new();
+    image
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    png
+}
+
 #[test]
 fn channels_keep_notes_clips_and_artwork_separate() {
     let runtime = runtime();
     let providers = providers(
         &runtime,
-        Arc::new(|req| openrouter(&req).unwrap_or_else(|| Resp::status(404, json!({})))),
+        Arc::new(|req| {
+            openrouter(&req)
+                .or_else(|| (req.host == "images.test").then(|| Resp::bytes("image/png", photo())))
+                .unwrap_or_else(|| Resp::status(404, json!({})))
+        }),
     );
     let root = Root::new(CONFIG);
     clip_row(&root, "blow", "aaaaaaaaaaa", 1, "uploaded", None);
@@ -98,9 +116,24 @@ fn channels_keep_notes_clips_and_artwork_separate() {
 
         // Channels without a template need the speaker's headshot.
         assert!(is_error(&call(base, "science", "edit_clip", json!({"clip_id": "bbbbbbbbbbb:01", "thumbnail_prompt": "a neuron"})).await));
-        let headshot = root.path().join("headshots/robert-sapolsky.jpg");
-        std::fs::create_dir_all(headshot.parent().unwrap()).unwrap();
-        image::RgbImage::from_pixel(1600, 900, image::Rgb(HEADSHOT_RED)).save(&headshot).unwrap();
+        assert!(is_error(&call(base, "science", "headshot", json!({"speaker": "Robert Sapolsky"})).await));
+        let save = |crop: serde_json::Value| {
+            json!({"speaker": "Robert Sapolsky", "image_url": "https://images.test/photo.png", "crop": crop})
+        };
+        // Too small a crop for a 480x720 portrait is refused.
+        let small = save(json!({"left": 0.0, "top": 0.0, "width": 0.1, "height": 0.5}));
+        assert!(is_error(&call(base, "science", "headshot", small).await));
+        // The uncropped photo's centred portrait straddles both halves.
+        let panel = image(&call(base, "science", "headshot", save(serde_json::Value::Null)).await);
+        assert_eq!((panel.width(), panel.height()), (720, 1080));
+        assert!(near(panel.get_pixel(100, 540), HEADSHOT_RED, 30) && near(panel.get_pixel(620, 540), GREEN, 30));
+        // Framed on the speaker: the left half only.
+        let crop = save(json!({"left": 0.0, "top": 0.0, "width": 0.5, "height": 1.0}));
+        let panel = image(&call(base, "science", "headshot", crop).await);
+        assert!(near(panel.get_pixel(620, 540), HEADSHOT_RED, 30));
+        // Another channel sees the same shared headshot.
+        let shared = image(&call(base, "blow", "headshot", json!({"speaker": "Robert Sapolsky"})).await);
+        assert!(near(shared.get_pixel(620, 540), HEADSHOT_RED, 30));
         data(&call(base, "science", "edit_clip", json!({"clip_id": "bbbbbbbbbbb:01", "thumbnail_prompt": "a neuron"})).await);
         let thumbnail = image(&call(base, "science", "view_thumbnail", json!({"clip_id": "bbbbbbbbbbb:01"})).await);
         assert!(near(thumbnail.get_pixel(360, 540), HEADSHOT_RED, 30));
