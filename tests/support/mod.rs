@@ -810,15 +810,19 @@ impl YouTube {
                 "statistics": {"subscriberCount": state.subscribers.to_string()},
                 "contentDetails": {"relatedPlaylists": {"uploads": "uploads"}},
             }]})),
+            // Like the real uploads playlist, an upload can appear twice.
             ("GET", "/youtube/v3/playlistItems") => Resp::json(json!({
-                "items": state.videos.iter().map(|v| json!({"contentDetails": {"videoId": v["id"]}})).collect::<Vec<_>>()
+                "items": state.videos.iter().chain(state.videos.first()).map(|v| json!({"contentDetails": {"videoId": v["id"]}})).collect::<Vec<_>>()
             })),
             ("GET", "/youtube/v3/videos") => {
                 let ids = req.arg("id").unwrap_or_default();
                 let ids: Vec<&str> = ids.split(',').collect();
-                Resp::json(
-                    json!({"items": state.videos.iter().filter(|v| ids.contains(&v["id"].as_str().unwrap_or(""))).collect::<Vec<_>>()}),
-                )
+                // One item per requested id, repeats included, as YouTube does.
+                let items: Vec<&Value> = ids
+                    .iter()
+                    .filter_map(|id| state.videos.iter().find(|v| v["id"] == *id))
+                    .collect();
+                Resp::json(json!({ "items": items }))
             }
             ("PUT", "/youtube/v3/videos") => {
                 let update = req.json();

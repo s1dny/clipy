@@ -11,7 +11,6 @@ pub mod google;
 pub mod jobs;
 pub mod matrix;
 pub mod mcp;
-pub mod migrate;
 pub mod observations;
 pub mod pipeline;
 pub mod publish;

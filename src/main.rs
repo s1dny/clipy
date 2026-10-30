@@ -46,8 +46,6 @@ enum Command {
         #[arg(long)]
         clips: Option<PathBuf>,
     },
-    /// Import the previous file-based data layout, once.
-    Migrate,
     /// Serve the public site.
     Site {
         #[arg(long, default_value = "site")]
@@ -65,6 +63,7 @@ async fn main() -> ExitCode {
                 .unwrap_or_else(|_| "info,rmcp=warn".into()),
         )
         .with_writer(std::io::stderr)
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .init();
     match run(Cli::parse()).await {
         Ok(true) => ExitCode::SUCCESS,
@@ -151,7 +150,6 @@ async fn run(cli: Cli) -> Result<bool> {
             };
             pipeline::process(&app, &channel, &url, &speaker, selections, &log).await?;
         }
-        Command::Migrate => clipy::migrate::run(&app)?,
         Command::Agent { .. } | Command::Site { .. } => unreachable!(),
     }
     Ok(true)

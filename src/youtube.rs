@@ -262,7 +262,10 @@ pub async fn channel_videos(app: &App, channel: &str, refresh: bool) -> Result<A
         let response = get(app, channel, "playlistItems", &query).await?;
         for item in response["items"].as_array().into_iter().flatten() {
             if let Some(id) = item["contentDetails"]["videoId"].as_str() {
-                ids.push(id.to_owned());
+                // A playlist can list the same upload twice.
+                if !ids.iter().any(|known| known == id) {
+                    ids.push(id.to_owned());
+                }
             }
         }
         match response["nextPageToken"].as_str() {
