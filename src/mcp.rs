@@ -1142,6 +1142,20 @@ impl Channel {
                 {
                     bail!("{} is already queued for upload.", args.clip_id);
                 }
+                // Uploads run beside renders, so an edit must land first.
+                if let Some(edit) = self
+                    .jobs
+                    .active(&self.name, "edit_video")
+                    .await?
+                    .iter()
+                    .find(|j| j["args"]["clip_id"] == args.clip_id.as_str())
+                {
+                    bail!(
+                        "{} is being edited by job {}; wait_for_job on it before publishing.",
+                        args.clip_id,
+                        edit["id"]
+                    );
+                }
                 let when = match args.publish_at.or(if clip.status == "failed" {
                     clip.publish_at.clone()
                 } else {

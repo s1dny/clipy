@@ -1,5 +1,7 @@
-//! Every channel's long work, run one job at a time in the background and
-//! persisted, so a restart resumes or fails each job explicitly.
+//! Every channel's long work, run in the background and persisted, so a
+//! restart resumes or fails each job explicitly. Media work and YouTube work
+//! are separate lanes, each one job at a time, so an upload never waits
+//! behind hours of rendering.
 
 use std::sync::Arc;
 
@@ -16,6 +18,13 @@ const LOG_LINES: usize = 40;
 /// step is cached; an interrupted upload may already exist on YouTube, so
 /// publishes and repairs are failed instead of retried.
 const RESUMABLE: [&str; 2] = ["prepare_source", "process_source"];
+
+/// The lanes: downloading, transcribing and rendering; then uploads and
+/// changes to YouTube.
+const LANES: [&[&str]; 2] = [
+    &["prepare_source", "process_source", "edit_video"],
+    &["publish", "thumbnails", "repair"],
+];
 
 /// A job's log: the last lines are kept on the job for the agent to read.
 #[derive(Clone)]
@@ -53,7 +62,7 @@ impl JobLog {
 
 pub struct Jobs {
     app: Arc<App>,
-    wake: tokio::sync::Notify,
+    wake: [tokio::sync::Notify; 2],
 }
 
 fn row_to_json(row: &rusqlite::Row) -> rusqlite::Result<Value> {
@@ -98,9 +107,11 @@ impl Jobs {
         })?;
         let jobs = Arc::new(Self {
             app,
-            wake: tokio::sync::Notify::new(),
+            wake: Default::default(),
         });
-        tokio::spawn(jobs.clone().work());
+        for lane in 0..LANES.len() {
+            tokio::spawn(jobs.clone().work(lane));
+        }
         Ok(jobs)
     }
 
@@ -118,7 +129,9 @@ impl Jobs {
                 Ok(())
             })
             .await?;
-        self.wake.notify_one();
+        for wake in &self.wake {
+            wake.notify_one();
+        }
         self.get(&id).await
     }
 
@@ -169,13 +182,21 @@ impl Jobs {
             .await
     }
 
-    async fn next(&self) -> Result<Option<(String, String, String, Value)>> {
+    async fn next(&self, lane: usize) -> Result<Option<(String, String, String, Value)>> {
+        let kinds = LANES[lane]
+            .iter()
+            .map(|k| format!("'{k}'"))
+            .collect::<Vec<_>>()
+            .join(",");
         self.app
             .db
-            .call(|c| {
+            .call(move |c| {
                 Ok(c.query_row(
-                    "SELECT id, channel, kind, args FROM jobs WHERE status = 'queued'
-                     ORDER BY submitted_at, rowid LIMIT 1",
+                    &format!(
+                        "SELECT id, channel, kind, args FROM jobs
+                         WHERE status = 'queued' AND kind IN ({kinds})
+                         ORDER BY submitted_at, rowid LIMIT 1"
+                    ),
                     [],
                     |r| {
                         Ok((
@@ -191,9 +212,9 @@ impl Jobs {
             .await
     }
 
-    async fn work(self: Arc<Self>) {
+    async fn work(self: Arc<Self>, lane: usize) {
         loop {
-            let next = match self.next().await {
+            let next = match self.next(lane).await {
                 Ok(next) => next,
                 Err(error) => {
                     tracing::error!("Job queue unreadable: {error:#}");
@@ -201,9 +222,11 @@ impl Jobs {
                 }
             };
             let Some((id, channel, kind, args)) = next else {
-                let _ =
-                    tokio::time::timeout(std::time::Duration::from_secs(30), self.wake.notified())
-                        .await;
+                let _ = tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    self.wake[lane].notified(),
+                )
+                .await;
                 continue;
             };
             let started = id.clone();
