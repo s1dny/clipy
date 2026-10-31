@@ -166,6 +166,8 @@ async fn session(settings: &Settings, work: &Path, endpoint: &str, prompt: &str)
     let mut child = command
         .current_dir(work)
         .env("MCP_TOOL_TIMEOUT", "900000")
+        // wait_for_job is silent for up to 14 minutes while it waits server-side.
+        .env("CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT", "900000")
         .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
