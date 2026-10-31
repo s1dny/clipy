@@ -22,8 +22,8 @@ stay attached to the same channels.
 Once a day an AI agent runs each channel in turn. It reads the channel's
 analytics, looks at how recent uploads are doing, and decides what to change.
 It finds new source videos, checks that the right person does most of the
-talking, and clips them. On Mondays it schedules the coming week's uploads,
-one per day. It rewrites titles and thumbnails on videos that underperform,
+talking, and clips them. Every run it keeps the next seven days scheduled,
+one upload a day, with a reserve of clips behind them. It rewrites titles and thumbnails on videos that underperform,
 and learns which excerpts and titles work from the results.
 
 The agent has no memory of its own between runs. It reads a notebook at the
