@@ -65,11 +65,13 @@ pub async fn prepare(app: &App, url: &str, include_video: bool, log: &JobLog) ->
     }))
 }
 
+/// The most sentences one page returns: about 20k tokens, under Claude
+/// Code's limit for a tool result.
+pub const TRANSCRIPT_PAGE: usize = 500;
+
 /// Lossless pages; next_offset is null only when the end has been reached.
 pub async fn transcript_page(app: &App, url: &str, offset: usize, limit: usize) -> Result<Value> {
-    if !(1..=1000).contains(&limit) {
-        bail!("offset must be nonnegative and limit between 1 and 1000.");
-    }
+    let limit = limit.clamp(1, TRANSCRIPT_PAGE);
     let sentences = sentences(app, &video_id(url)?)
         .await?
         .context("Call prepare_source and let its job finish first.")?;

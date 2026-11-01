@@ -3,8 +3,9 @@
 //! Audio (for transcription) and video (for rendering) are separate YouTube
 //! streams, fetched separately; nothing is merged or re-encoded here.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -66,6 +67,17 @@ async fn download(
     format: &str,
     log: &JobLog,
 ) -> Result<PathBuf> {
+    // Sources are shared, and preparation and rendering run in separate
+    // lanes, so two jobs may want the same file at once: one downloads it.
+    static DOWNLOADS: LazyLock<Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>> =
+        LazyLock::new(Default::default);
+    let lock = DOWNLOADS
+        .lock()
+        .unwrap()
+        .entry(dir.join(stem))
+        .or_default()
+        .clone();
+    let _guard = lock.lock().await;
     if let Some(existing) = downloaded(dir, stem) {
         log.info(format!("Reusing downloaded {stem}"));
         return Ok(existing);

@@ -60,8 +60,8 @@ fn twenty() -> usize {
 fn ten() -> usize {
     10
 }
-fn two_hundred() -> usize {
-    200
+fn transcript_page() -> usize {
+    crate::pipeline::TRANSCRIPT_PAGE
 }
 fn yes() -> bool {
     true
@@ -201,7 +201,7 @@ pub struct TranscriptArgs {
     url: String,
     #[serde(default)]
     offset: usize,
-    #[serde(default = "two_hundred")]
+    #[serde(default = "transcript_page")]
     limit: usize,
 }
 

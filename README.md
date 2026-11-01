@@ -11,11 +11,8 @@ hours if it is not monetized yet.
 | [Jonathan Blow Clips](https://www.youtube.com/@JonathanBlowClips) (`blow`) | Jonathan Blow only | Ad revenue |
 | [Casey Muratori Clips](https://www.youtube.com/@caseymuratoriclips) (`casey`) | Casey Muratori only | Watch hours |
 | [George Hotz Clips](https://www.youtube.com/@georgehotzclips) (`hotz`) | George Hotz only | Watch hours |
-| [t3gg Clips](https://www.youtube.com/@t3ggclips) (`science`) | Theo only | Watch hours |
-| [Tsoding Clips](https://www.youtube.com/@TsodingClips) (`philosophy`) | Tsoding only | Watch hours |
-
-The `science` and `philosophy` names are kept so the existing YouTube logins
-stay attached to the same channels.
+| [t3gg Clips](https://www.youtube.com/@t3ggclips) (`theo`) | Theo only | Watch hours |
+| [Tsoding Clips](https://www.youtube.com/@TsodingClips) (`tsoding`) | Tsoding only | Watch hours |
 
 ## What happens each day
 

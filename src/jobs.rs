@@ -1,7 +1,7 @@
 //! Every channel's long work, run in the background and persisted, so a
-//! restart resumes or fails each job explicitly. Media work and YouTube work
-//! are separate lanes, each one job at a time, so an upload never waits
-//! behind hours of rendering.
+//! restart resumes or fails each job explicitly. Downloads, rendering and
+//! YouTube work are separate lanes, each one job at a time, so a source
+//! downloads while another renders and an upload never waits behind either.
 
 use std::sync::Arc;
 
@@ -19,10 +19,11 @@ const LOG_LINES: usize = 40;
 /// publishes and repairs are failed instead of retried.
 const RESUMABLE: [&str; 2] = ["prepare_source", "process_source"];
 
-/// The lanes: downloading, transcribing and rendering; then uploads and
-/// changes to YouTube.
-const LANES: [&[&str]; 2] = [
-    &["prepare_source", "process_source", "edit_video"],
+/// The lanes: downloading and transcribing (network); rendering (CPU);
+/// uploads and changes to YouTube.
+const LANES: [&[&str]; 3] = [
+    &["prepare_source"],
+    &["process_source", "edit_video"],
     &["publish", "thumbnails", "repair"],
 ];
 
@@ -62,7 +63,7 @@ impl JobLog {
 
 pub struct Jobs {
     app: Arc<App>,
-    wake: [tokio::sync::Notify; 2],
+    wake: [tokio::sync::Notify; LANES.len()],
 }
 
 fn row_to_json(row: &rusqlite::Row) -> rusqlite::Result<Value> {

@@ -33,7 +33,7 @@ enum Command {
         url: String,
         #[arg(long, default_value_t = 0)]
         offset: usize,
-        #[arg(long, default_value_t = 200)]
+        #[arg(long, default_value_t = clipy::pipeline::TRANSCRIPT_PAGE)]
         limit: usize,
     },
     /// Render clip selections (a JSON array file), or resume the saved ones.
