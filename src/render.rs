@@ -218,28 +218,22 @@ pub async fn render(
     ));
     let mut current = "base".to_owned();
     let mut index = 2;
-    let mut overlay =
-        |command: &mut Command, image: &Path, enable: Option<(i64, i64)>, target: String| {
-            command
-                .args([
-                    "-loop",
-                    "1",
-                    "-framerate",
-                    &rate.to_string(),
-                    "-t",
-                    &total,
-                    "-i",
-                ])
-                .arg(image);
-            let enable = enable
-                .map(|(s, e)| format!(":enable='gte(t,{})*lt(t,{})'", seconds(s), seconds(e)))
-                .unwrap_or_default();
-            filters.push(format!(
-                "[{current}][{index}:v]overlay=0:0{enable}[{target}]"
-            ));
-            current = target;
-            index += 1;
-        };
+    let mut overlay = |command: &mut Command,
+                       image: &Path,
+                       (x, y): (u32, u32),
+                       enable: Option<(i64, i64)>,
+                       target: String| {
+        // One decoded frame; overlay repeats it for as long as it shows.
+        command.arg("-i").arg(image);
+        let enable = enable
+            .map(|(s, e)| format!(":enable='gte(t,{})*lt(t,{})'", seconds(s), seconds(e)))
+            .unwrap_or_default();
+        filters.push(format!(
+            "[{current}][{index}:v]overlay={x}:{y}{enable}[{target}]"
+        ));
+        current = target;
+        index += 1;
+    };
     // Full-screen frame holds preserve the speaker's EXISTING drawing.
     for (i, hold) in selection.visual_holds.iter().enumerate() {
         let still = work.path().join(format!("hold-{i}.jpg"));
@@ -247,6 +241,7 @@ pub async fn render(
         overlay(
             &mut command,
             &still,
+            (0, 0),
             Some((hold.start_ms, hold.end_ms)),
             format!("hold{i}"),
         );
@@ -259,29 +254,28 @@ pub async fn render(
         };
         let window = Some((card.start_ms, card.end_ms));
         let (card, target) = (card.clone(), path.clone());
-        tokio::task::spawn_blocking(move || cards::card(&card, art, width, height, &target))
-            .await??;
-        overlay(&mut command, &path, window, format!("card{i}"));
+        let origin = tokio::task::spawn_blocking(move || {
+            cards::card(&card, art, width, height, &target)?;
+            crop_to_content(&target)
+        })
+        .await??;
+        overlay(&mut command, &path, origin, window, format!("card{i}"));
     }
     if let Some(source) = &selection.source {
         let path = work.path().join("source.png");
         let (source, target) = (source.clone(), path.clone());
-        tokio::task::spawn_blocking(move || cards::source_bug(&source, width, height, &target))
-            .await??;
-        overlay(&mut command, &path, None, "attributed".into());
+        let origin = tokio::task::spawn_blocking(move || {
+            cards::source_bug(&source, width, height, &target)?;
+            crop_to_content(&target)
+        })
+        .await??;
+        overlay(&mut command, &path, origin, None, "attributed".into());
     }
     let partial = output.with_extension("partial.mp4");
     command
         .arg("-filter_complex")
         .arg(filters.join(";\n"))
-        .args([
-            "-filter_complex_threads",
-            "1",
-            "-map",
-            &format!("[{current}]"),
-            "-map",
-            "[sound]",
-        ])
+        .args(["-map", &format!("[{current}]"), "-map", "[sound]"])
         .args(X264)
         .args(AAC)
         .args(["-t", &total, "-movflags", "+faststart"])
@@ -316,6 +310,30 @@ pub async fn verify(path: &Path, duration_ms: i64, ffmpeg: &str) -> Result<Value
         bail!("Edited duration mismatch: {actual}s vs {expected}s.");
     }
     Ok(json!({ "duration_seconds": actual, "audio_and_video": true }))
+}
+
+/// Crop a full-frame overlay to its visible pixels and return where they
+/// sit, so each frame blends a small box instead of a whole frame.
+fn crop_to_content(path: &Path) -> Result<(u32, u32)> {
+    let image = image::open(path)?.into_rgba8();
+    let (mut left, mut top, mut right, mut bottom) = (u32::MAX, u32::MAX, 0, 0);
+    for (x, y, pixel) in image.enumerate_pixels() {
+        if pixel[3] > 0 {
+            (left, top) = (left.min(x), top.min(y));
+            (right, bottom) = (right.max(x + 1), bottom.max(y + 1));
+        }
+    }
+    if right == 0 {
+        bail!("Overlay {} is empty.", path.display());
+    }
+    // Even offsets and sizes keep the box aligned with 4:2:0 chroma.
+    let (left, top) = (left & !1, top & !1);
+    let right = (right + (right - left) % 2).min(image.width());
+    let bottom = (bottom + (bottom - top) % 2).min(image.height());
+    image::imageops::crop_imm(&image, left, top, right - left, bottom - top)
+        .to_image()
+        .save(path)?;
+    Ok((left, top))
 }
 
 fn parse_rate(rate: &str) -> f64 {

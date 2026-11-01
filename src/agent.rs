@@ -133,7 +133,14 @@ impl Run {
 }
 
 /// One headless Claude Code session with a single MCP server named clipy.
-async fn session(settings: &Settings, work: &Path, endpoint: &str, prompt: &str) -> Result<Run> {
+/// Its console lines carry `name`, since channels run side by side.
+async fn session(
+    settings: &Settings,
+    name: &str,
+    work: &Path,
+    endpoint: &str,
+    prompt: &str,
+) -> Result<Run> {
     tokio::fs::create_dir_all(work).await?;
     let config = work.join("mcp.json");
     let servers = json!({"mcpServers": {"clipy": {
@@ -183,7 +190,7 @@ async fn session(settings: &Settings, work: &Path, endpoint: &str, prompt: &str)
     let mut run = Run::default();
     let mut tools: HashMap<String, String> = HashMap::new();
     let say = |run: &mut Run, line: String| {
-        println!("{line}");
+        println!("[{name}] {line}");
         run.log.push(line);
     };
     while let Some(line) = lines.next_line().await? {
@@ -285,12 +292,12 @@ async fn run_channel(settings: &Settings, channel: &str) -> Result<Run> {
             "\nOne-off instruction from the owner for this run (it overrides the rules above where they conflict):\n{note}\n"
         );
     }
-    println!("=== {channel}");
     let started = Instant::now();
     let mut attempt = 1;
     loop {
         let mut run = session(
             settings,
+            channel,
             &settings.work.join(channel),
             &format!("/mcp/{channel}"),
             &prompt,
@@ -301,7 +308,7 @@ async fn run_channel(settings: &Settings, channel: &str) -> Result<Run> {
             return Ok(run);
         }
         println!(
-            "Claude usage limit before any tools ran; retrying {channel} in {} minutes (attempt {}/3).",
+            "[{channel}] Claude usage limit before any tools ran; retrying in {} minutes (attempt {}/3).",
             settings.retry.as_secs() / 60,
             attempt + 1
         );
@@ -325,18 +332,23 @@ fn summary(channel: &str, run: &Run) -> String {
 pub async fn run(home: &Path, channels: &[String]) -> Result<bool> {
     let settings = Settings::from_env(home)?;
     let http = crate::app::http_client(Duration::from_secs(300))?;
-    let mut runs = Vec::new();
-    for channel in channels {
-        let run = match run_channel(&settings, channel).await {
-            Ok(run) => run,
-            Err(error) => Run {
-                log: vec![format!("error: {error:#}")],
-                ..Default::default()
-            },
-        };
-        println!("{}", run.footer(true));
-        runs.push((channel.clone(), run));
-    }
+    // Channels are independent, so their agents run side by side; the
+    // server still renders one source at a time.
+    let runs = futures::future::join_all(channels.iter().map(|channel| {
+        let settings = &settings;
+        async move {
+            let run = match run_channel(settings, channel).await {
+                Ok(run) => run,
+                Err(error) => Run {
+                    log: vec![format!("error: {error:#}")],
+                    ..Default::default()
+                },
+            };
+            println!("[{channel}] {}", run.footer(true));
+            (channel.clone(), run)
+        }
+    }))
+    .await;
 
     // The server builds the stats header, since only it holds the analytics.
     let stats = async {
@@ -354,10 +366,10 @@ pub async fn run(home: &Path, channels: &[String]) -> Result<bool> {
     for (channel, run) in &runs {
         prompt += &format!("{}\n", summary(channel, run));
     }
-    println!("=== observer");
     let started = Instant::now();
     let mut observer = session(
         &settings,
+        "observer",
         &settings.work.join("observer"),
         "/observer",
         &prompt,

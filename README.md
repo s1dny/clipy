@@ -19,7 +19,7 @@ stay attached to the same channels.
 
 ## What happens each day
 
-Once a day an AI agent runs each channel in turn. It reads the channel's
+Once a day an AI agent runs every channel, side by side. It reads the channel's
 analytics, looks at how recent uploads are doing, and decides what to change.
 It finds new source videos, checks that the right person does most of the
 talking, and clips them. Every run it keeps the next seven days scheduled,
