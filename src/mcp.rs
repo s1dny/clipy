@@ -1181,38 +1181,46 @@ impl Channel {
     }
 
     /// Render an illustration beside the speaker's headshot or the channel's
-    /// template. Returns a local path; inspect it with the Read tool, then
-    /// upload it with google_api_write using the service's media-upload method
-    /// and media_path. Drawing never changes a live video. Use edit_clip for a
-    /// queued clip's artwork.
+    /// template. Returns the image to look at and its server path; upload it
+    /// with google_api_write using the service's media-upload method and that
+    /// path as media_path. Drawing never changes a live video. Use edit_clip
+    /// for a queued clip's artwork.
     #[tool(annotations(
         read_only_hint = false,
         destructive_hint = false,
         open_world_hint = true
     ))]
     async fn draw_thumbnail(&self, Parameters(args): Parameters<DrawArgs>) -> CallToolResult {
-        reply(
-            async {
-                let speaker = args
-                    .speaker
-                    .or(self.app.channel_config(&self.name)?.speaker);
-                let path = self
-                    .app
-                    .channel_dir(&self.name)
-                    .join("artwork")
-                    .join(format!("{}.jpg", uuid::Uuid::new_v4().simple()));
-                crate::thumbnails::draw(
-                    &self.app,
-                    &self.name,
-                    &args.thumbnail_prompt,
-                    speaker.as_deref(),
-                    &path,
-                )
-                .await?;
-                Ok(json!({"path": path}))
-            }
-            .await,
-        )
+        let drawn = async {
+            let speaker = args
+                .speaker
+                .or(self.app.channel_config(&self.name)?.speaker);
+            let path = self
+                .app
+                .channel_dir(&self.name)
+                .join("artwork")
+                .join(format!("{}.jpg", uuid::Uuid::new_v4().simple()));
+            crate::thumbnails::draw(
+                &self.app,
+                &self.name,
+                &args.thumbnail_prompt,
+                speaker.as_deref(),
+                &path,
+            )
+            .await?;
+            Ok::<_, anyhow::Error>((std::fs::read(&path)?, path))
+        }
+        .await;
+        match drawn {
+            Ok((jpeg, path)) => CallToolResult::success(vec![
+                ContentBlock::text(json!({"path": path}).to_string()),
+                ContentBlock::image(
+                    base64::engine::general_purpose::STANDARD.encode(jpeg),
+                    "image/jpeg",
+                ),
+            ]),
+            Err(error) => reply(Err(error)),
+        }
     }
 
     /// A speaker's headshot, shared by every channel whose thumbnails show the

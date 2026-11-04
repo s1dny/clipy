@@ -1,5 +1,7 @@
 # Copy to config.toml. Each channel's settings are [defaults] with
 # [channels.<name>] on top; the agent's prompt overrides win over both.
+# Per-channel editorial guidance belongs to the agent (update_prompts, kept
+# in clipy.db); the default here only seeds a new channel.
 
 [runtime]
 ffmpeg_path = "ffmpeg"
@@ -57,21 +59,6 @@ Twitch: https://www.twitch.tv/georgehotz
 #georgehotz #programming #ai #tinygrad
 """
 
-editorial_guidance = """
-This is a transcript of an original long-form video featuring George Hotz, the programmer and hacker behind comma.ai and tinygrad.
-
-Find strong standalone clips about AI, machine learning, programming, GPUs, software performance, hacking, self-driving technology, or building a technology company. Prefer one clear argument, a concrete explanation, or a demonstration that makes sense without the preceding stream. Skip unrelated politics, personal tangents, small talk, sponsorships, silent coding and debugging that requires extensive context.
-
-Rules:
-- George Hotz must be the main speaker throughout each clip. Skip segments dominated by hosts or other guests.
-- Each clip covers one topic with a clear beginning and a natural end. Never cut mid-sentence or misrepresent an argument.
-- STRICT MINIMUM 8 minutes, STRICT MAXIMUM 20 minutes; aim for 10-14 minutes. Do not pad weak material.
-- Clips must not overlap. Score each 1-10 for standalone watch-time potential.
-- Titles start with "George Hotz on" and name one concrete subject or supported claim, ideally under 65 characters. Never invent a claim or imply an old opinion is current.
-
-Write the selections yourself and submit them through process_source using its schema.
-"""
-
 [channels.casey]
 handle = "@caseymuratoriclips"
 speaker = "Casey Muratori"
@@ -86,19 +73,4 @@ Original: {original_url}
 Casey's work: https://caseymuratori.com/
 
 #caseymuratori #programming #softwareperformance #gamedev
-"""
-
-editorial_guidance = """
-This is a transcript of an original long-form video featuring Casey Muratori, the programmer behind Handmade Hero and Computer, Enhance!.
-
-Find strong standalone clips about programming, software performance, software design, clean code, object-oriented programming, C/C++, game engines, hardware, or learning to build software. Prefer one clear argument, a concrete explanation, or a demonstration that makes sense without the preceding talk or stream. Skip small talk, sponsorships, unrelated personal or political tangents, silent coding, and debugging that requires extensive context. Public talks, interviews and free streams are sources; paid course lessons are not.
-
-Rules:
-- Casey Muratori must be the main speaker. Skip segments dominated by hosts or other guests.
-- Each clip covers one topic, starts at its beginning and ends naturally. Never cut mid-sentence or misrepresent an argument.
-- STRICT MINIMUM 8 minutes, STRICT MAXIMUM 20 minutes; aim for 10-14 minutes. Do not pad weak material.
-- Clips must not overlap. Score each 1-10 for standalone watch-time potential.
-- Titles start with "Casey Muratori on" followed by one concrete subject or supported claim, ideally under 65 characters. Never invent a claim.
-
-Write the selections yourself and submit them through process_source using its schema.
 """

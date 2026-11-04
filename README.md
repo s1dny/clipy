@@ -79,9 +79,11 @@ Transcripts are shared between channels, so a source is only paid for once.
 
 Saved selections are immutable: retrying a render reuses them, and
 submitting different ones over existing exports is refused. An empty
-selection records a source with nothing worth clipping. Jobs from every
-channel run one at a time and survive restarts: preparation and rendering
-resume, while an interrupted upload is failed so it is never duplicated.
+selection records a source with nothing worth clipping. Jobs run in three
+lanes shared by every channel, each one job at a time: downloading and
+transcribing, rendering, and YouTube uploads and changes. They survive
+restarts: preparation and rendering resume, while an interrupted upload is
+failed so it is never duplicated.
 
 **Rendering** is one continuous ffmpeg encode with aligned audio and video.
 The agent may keep chosen source ranges, add image-and-caption cards (square

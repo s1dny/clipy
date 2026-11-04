@@ -245,6 +245,7 @@ fn setup(monetized: bool) -> (tokio::runtime::Runtime, Providers, Root, Arc<Fixt
                 .or_else(|| YouTube::handle(&fixture.youtube, &req))
                 .or_else(|| studio(&fixture, &req))
                 .or_else(|| google(&req))
+                .or_else(|| openrouter(&req))
                 .unwrap_or_else(|| {
                     Resp::status(
                         404,
@@ -536,9 +537,13 @@ fn discovered_api_methods_preserve_raw_data_and_separate_writes() {
         let token = root.path().join("channels/blow/youtube-token.json");
         media["media_path"] = json!(token);
         assert!(is_error(&call(&base, "blow", "google_api_write", media.clone()).await));
-        let inside = root.path().join("channels/blow/artwork/test.jpg");
-        std::fs::create_dir_all(inside.parent().unwrap()).unwrap();
-        std::fs::copy(&outside, &inside).unwrap();
+        // Artwork drawn for a live video comes back as an image to inspect,
+        // with the server path to upload.
+        let drawn = call(&base, "blow", "draw_thumbnail", json!({"thumbnail_prompt": "a chip in chains"})).await;
+        let artwork = image(&drawn);
+        assert_eq!((artwork.width(), artwork.height()), (1920, 1080));
+        let inside = std::path::PathBuf::from(data(&drawn)["path"].as_str().unwrap());
+        assert!(inside.starts_with(root.path().join("channels/blow/artwork")));
         media["media_path"] = json!(inside);
         let uploaded = data(&call(&base, "blow", "google_api_write", media).await);
         let id = uploaded["audit_id"].as_str().unwrap().to_owned();
