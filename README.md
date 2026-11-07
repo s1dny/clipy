@@ -9,7 +9,7 @@ hours if it is not monetized yet.
 | Channel | Who appears | Goal |
 |---|---|---|
 | [Jonathan Blow Clips](https://www.youtube.com/@JonathanBlowClips) (`blow`) | Jonathan Blow only | Ad revenue |
-| [Casey Muratori Clips](https://www.youtube.com/@caseymuratoriclips) (`casey`) | Casey Muratori only | Watch hours |
+| [DHH Clips](https://www.youtube.com/@DHHClipsDaily) (`dhh`) | David Heinemeier Hansson only | Watch hours |
 | [George Hotz Clips](https://www.youtube.com/@georgehotzclips) (`hotz`) | George Hotz only | Watch hours |
 | [Tsoding Clips](https://www.youtube.com/@TsodingClips) (`tsoding`) | Tsoding only | Watch hours (paused) |
 
@@ -98,7 +98,7 @@ minutes after cuts, has no em dashes, and its description carries a literal
 
 **Thumbnails** have a picture on the left and, on the white right side, an
 illustration of the clip's idea drawn by an image model through OpenRouter.
-For Blow, Casey and Hotz the picture is a fixed template in `thumbnails/`;
+For Blow, DHH and Hotz the picture is a fixed template in `thumbnails/`;
 the other channels use a headshot of the speaker: the agent finds a photo
 and saves it, cropped, with the `headshot` tool, which shows it the exact
 thumbnail panel. Headshots live under `headshots/` and are shared by every

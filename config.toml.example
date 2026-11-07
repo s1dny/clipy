@@ -59,18 +59,18 @@ Twitch: https://www.twitch.tv/georgehotz
 #georgehotz #programming #ai #tinygrad
 """
 
-[channels.casey]
-handle = "@caseymuratoriclips"
-speaker = "Casey Muratori"
-thumbnail_template = "casey.jpg"
+[channels.dhh]
+handle = "@DHHClipsDaily"
+speaker = "David Heinemeier Hansson"
+thumbnail_template = "dhh.jpg"
 category_id = "28"
 
 description_template = """
 {clip_description}
 
-Clip from Casey Muratori
+Clip from David Heinemeier Hansson (DHH)
 Original: {original_url}
-Casey's work: https://caseymuratori.com/
+DHH's writing: https://world.hey.com/dhh
 
-#caseymuratori #programming #softwareperformance #gamedev
+#dhh #rubyonrails #programming #37signals
 """
