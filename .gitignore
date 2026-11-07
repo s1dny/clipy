@@ -7,3 +7,4 @@
 /headshots/
 *.env
 .DS_Store
+.matrix-token
