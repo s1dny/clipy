@@ -11,7 +11,7 @@ hours if it is not monetized yet.
 | [Jonathan Blow Clips](https://www.youtube.com/@JonathanBlowClips) (`blow`) | Jonathan Blow only | Ad revenue |
 | [Casey Muratori Clips](https://www.youtube.com/@caseymuratoriclips) (`casey`) | Casey Muratori only | Watch hours |
 | [George Hotz Clips](https://www.youtube.com/@georgehotzclips) (`hotz`) | George Hotz only | Watch hours |
-| [Tsoding Clips](https://www.youtube.com/@TsodingClips) (`tsoding`) | Tsoding only | Watch hours |
+| [Tsoding Clips](https://www.youtube.com/@TsodingClips) (`tsoding`) | Tsoding only | Watch hours (paused) |
 
 ## What happens each day
 
@@ -89,7 +89,9 @@ failed so it is never duplicated.
 The agent may keep chosen source ranges, add image-and-caption cards (square
 corners, monospace type, an optional real image with its credit) and hold an
 inspected source frame over continuing audio. A verified stream date and the
-source's name stay on screen throughout. Every release is at least eight
+source's name stay on screen throughout. Every new video has at least two
+cuts, opens with a card naming its title or concept, and has at least one
+later card explaining a term or concept; publishing refuses one that doesn't. Every release is at least eight
 minutes after cuts, has no em dashes, and its description carries a literal
 `Source:` line with the original link. `inspect_source_frame`,
 `inspect_clip_frame` and `get_edit_report` let the agent check its edits.
@@ -142,8 +144,9 @@ every `main` commit. Flux deploys it to azalab-0, and CI waits for
 the commit. The manifests are in the homelab repo under
 `flux/clusters/azalab-0/manifests/apps/clipy`.
 
-The `clipy-agent` CronJob runs the agents every day at 04:00 Sydney time. To
-run them now:
+The `clipy-agent` CronJob runs the agents every day at 04:00 Sydney time,
+for the channels named in its command. Tsoding is paused: it is left out, so
+its agent makes and schedules nothing new. To run them now:
 
 ```bash
 ssh azalab-0 kubectl -n clipy create job --from=cronjob/clipy-agent agent-manual-$(date +%s)

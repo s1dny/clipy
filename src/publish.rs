@@ -135,6 +135,38 @@ async fn check_release(app: &App, clip: &Clip, video: &Path) -> Result<()> {
     Ok(())
 }
 
+/// A new video must meet the current format (cuts, opening and explainer
+/// cards) as saved and as rendered. Repairs of uploaded videos skip this.
+async fn check_format(app: &App, channel: &str, clip: &Clip) -> Result<()> {
+    let (_, plans) = crate::pipeline::saved_selections(app, channel, &clip.source_id)
+        .await?
+        .context("The clip's saved selection is missing.")?;
+    let selection = plans
+        .get((clip.number - 1) as usize)
+        .context("The clip's saved selection is missing.")?;
+    selection
+        .validate_release()
+        .context("Bring this pending clip up to the video format with edit_video first.")?;
+    let rendered = clip.edit_report.as_ref();
+    let annotations = rendered
+        .map(|r| r["annotations"].clone())
+        .unwrap_or_default();
+    let cuts = rendered
+        .and_then(|r| r["timeline"].as_array())
+        .map_or(0, |spans| {
+            spans
+                .windows(2)
+                .filter(|pair| pair[0]["end_ms"].as_i64() < pair[1]["start_ms"].as_i64())
+                .count()
+        });
+    if annotations != serde_json::to_value(&selection.annotations)?
+        || cuts != selection.internal_cuts()
+    {
+        bail!("The rendered video does not match its saved edits; re-render it with edit_video.");
+    }
+    Ok(())
+}
+
 /// Upload a file through a resumable session. A dropped connection resumes
 /// the same session after asking how much arrived, so it can never insert a
 /// second video.
@@ -353,6 +385,7 @@ pub async fn publish(
     } else if clip.status != "pending" {
         bail!("Clip is {}, not pending or failed.", clip.status);
     }
+    check_format(app, channel, &clip).await?;
     clip.publish_at = publish_at;
     let config = app.channel_config(channel)?;
     let description = full_description(&clip, Some(&config.description_template), None);

@@ -270,10 +270,19 @@ fn agent_reads_full_source_and_submits_renderable_selections() {
         let selection = json!({
             "title": "An editorial choice",
             "description": "An accurate argument summary.",
-            "start_ms": sentences[1]["start"],
+            "start_ms": sentences[0]["start"],
             "end_ms": sentences[3]["end"],
             "thumbnail_prompt": "a bold object",
             "chapters": [],
+            "keep": [
+                {"start_ms": 0, "end_ms": 200000, "reason": "Opening argument"},
+                {"start_ms": 210000, "end_ms": 400000, "reason": "Skip a donation alert"},
+                {"start_ms": 410000, "end_ms": 500000, "reason": "Skip a false start"},
+            ],
+            "annotations": [
+                {"start_ms": 0, "end_ms": 5000, "label": "Context", "heading": "An editorial choice", "text": "What the argument is about.", "evidence": "Source transcript"},
+                {"start_ms": 60000, "end_ms": 70000, "label": "Reference", "heading": "A term", "text": "What the term means.", "evidence": "Source transcript"},
+            ],
             "source": {"name": "Fixture", "streamed_on": "2020-01-02", "evidence": "Fixture metadata"},
         });
         let with = |patch: Value| {
@@ -281,8 +290,35 @@ fn agent_reads_full_source_and_submits_renderable_selections() {
             merge(&mut clip, patch);
             clip
         };
-        // The public contract rejects short cuts, missing dates and forbidden punctuation.
-        for bad in [with(json!({"end_ms": 161000})), with(json!({"source": null})), with(json!({"description": "Forbidden \u{2014} punctuation."}))] {
+        // The public contract rejects short videos, missing dates, forbidden
+        // punctuation, fewer than two cuts, and a missing opening or explainer card.
+        let opening = selection["annotations"][0].clone();
+        let explainer = selection["annotations"][1].clone();
+        let late = json!([{"start_ms": 2000, "end_ms": 7000, "label": "Context", "heading": "Late", "text": "Too late.", "evidence": "Source transcript"}, explainer]);
+        let one_cut = json!([{"start_ms": 0, "end_ms": 300000, "reason": "A"}, {"start_ms": 310000, "end_ms": 500000, "reason": "B"}]);
+        let unbroken = json!([{"start_ms": 0, "end_ms": 200000, "reason": "A"}, {"start_ms": 200000, "end_ms": 400000, "reason": "B"}, {"start_ms": 400000, "end_ms": 480000, "reason": "C"}]);
+        let untitled = {
+            let mut card = opening.clone();
+            card.as_object_mut().unwrap().remove("heading");
+            json!([card, explainer])
+        };
+        let question = {
+            let mut card = explainer.clone();
+            card["label"] = "Question".into();
+            json!([opening, card])
+        };
+        for bad in [
+            with(json!({"end_ms": 161000, "keep": [], "annotations": []})),
+            with(json!({"source": null})),
+            with(json!({"description": "Forbidden \u{2014} punctuation."})),
+            with(json!({"keep": [], "end_ms": 480000})),
+            with(json!({"keep": one_cut})),
+            with(json!({"keep": unbroken})),
+            with(json!({"annotations": late})),
+            with(json!({"annotations": untitled})),
+            with(json!({"annotations": [opening.clone()]})),
+            with(json!({"annotations": question})),
+        ] {
             assert!(is_error(&call(base, "blow", "process_source", json!({"url": url, "clips": [bad]})).await));
         }
         let before = data(&call(base, "blow", "list_queue", json!({})).await);
@@ -304,7 +340,7 @@ fn agent_reads_full_source_and_submits_renderable_selections() {
         let resumed = wait_job(base, "blow", &data(&call(base, "blow", "process_source", json!({"url": url})).await)).await;
         assert_eq!(resumed["status"], "succeeded", "{resumed}");
         assert_eq!(data(&call(base, "blow", "list_queue", json!({})).await), listed);
-        let changed = data(&call(base, "blow", "process_source", json!({"url": url, "clips": [with(json!({"start_ms": 0}))]})).await);
+        let changed = data(&call(base, "blow", "process_source", json!({"url": url, "clips": [with(json!({"end_ms": 600000}))]})).await);
         assert_eq!(wait_job(base, "blow", &changed).await["status"], "failed");
         assert_eq!(data(&call(base, "blow", "list_queue", json!({})).await), listed);
 

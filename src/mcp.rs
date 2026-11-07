@@ -900,11 +900,14 @@ impl Channel {
     /// FINAL output. Every release must be at least 8 minutes after cuts and
     /// include source={name, streamed_on, evidence} with a verified
     /// stream/recording date, which stays visible throughout. Never substitute
-    /// an upload date. No em dashes. Optional keep=[{start_ms,end_ms,reason}]
-    /// gives chronological retained SOURCE ranges within start_ms/end_ms; omit
-    /// it to keep the full excerpt. Optional annotations=[{start_ms, end_ms,
-    /// label, text, evidence, heading?, image_url?, image_credit?, position?}]
-    /// are brief cards timed in FINAL-output milliseconds; label is
+    /// an upload date. No em dashes. keep=[{start_ms,end_ms,reason}] gives
+    /// chronological retained SOURCE ranges within start_ms/end_ms, with at
+    /// least 2 real gaps between them (2 cuts). annotations=[{start_ms,
+    /// end_ms, label, text, evidence, heading?, image_url?, image_credit?,
+    /// position?}] are brief cards timed in FINAL-output milliseconds: the
+    /// first starts by 1000 ms, lasts 4 s or more and has a heading naming the
+    /// video's title or concept; at least one later Context or Reference card
+    /// explains a term or concept the speaker uses; label is
     /// Context/Recorded/Uploaded/Question/Reference and is never printed;
     /// position is top_left/top_right/bottom_left/bottom_right, chosen from
     /// actual frames so cards preserve faces, code and drawings. Optional
@@ -1045,7 +1048,8 @@ impl Channel {
     /// Re-render a PENDING video with its mandatory verified stream date and
     /// source, and optionally revise cuts, cards, holds and chapters. Omitted
     /// fields keep the existing edits; [] clears that edit type. Output must
-    /// remain at least 8 minutes. No em dashes or printed category labels.
+    /// remain at least 8 minutes, with at least 2 cuts, an opening title card
+    /// and a later explainer card, as process_source describes. No em dashes or printed category labels.
     /// Returns a background job. Never for uploaded videos. The source date is a
     /// stream/recording date, never an upload date.
     #[tool(annotations(

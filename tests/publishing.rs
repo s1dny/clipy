@@ -32,7 +32,19 @@ fn source() -> Value {
 }
 
 fn plan() -> Value {
-    json!({"title": "Clip 01", "description": "A clip.", "thumbnail_prompt": "a compiler", "start_ms": 0, "end_ms": 480000, "source": source()})
+    json!({
+        "title": "Clip 01", "description": "A clip.", "thumbnail_prompt": "a compiler",
+        "start_ms": 0, "end_ms": 500000, "source": source(),
+        "keep": [
+            {"start_ms": 0, "end_ms": 200000, "reason": "Opening argument"},
+            {"start_ms": 210000, "end_ms": 400000, "reason": "Skip a donation alert"},
+            {"start_ms": 410000, "end_ms": 500000, "reason": "Skip a false start"},
+        ],
+        "annotations": [
+            {"start_ms": 0, "end_ms": 5000, "label": "Context", "heading": "Clip 01", "text": "What the clip is about.", "evidence": "Fixture"},
+            {"start_ms": 60000, "end_ms": 70000, "label": "Reference", "heading": "A compiler", "text": "What a compiler is.", "evidence": "Fixture"},
+        ],
+    })
 }
 
 fn setup(status: &str) -> Setup {
@@ -59,13 +71,13 @@ fn setup(status: &str) -> Setup {
         "-f",
         "lavfi",
         "-i",
-        "color=c=blue:size=320x180:rate=1/10:duration=480",
+        "color=c=blue:size=320x180:rate=1/10:duration=500",
         "-f",
         "lavfi",
         "-i",
         "anullsrc=r=8000:cl=mono",
         "-t",
-        "480",
+        "500",
         "-c:v",
         "libx264",
         "-preset",
@@ -196,6 +208,39 @@ fn scheduled_upload_survives_reset_and_lost_confirmation() {
         assert_eq!((youtube.sessions, youtube.videos.len()), (1, 1));
         assert_eq!(row(&setup.root).youtube_id.as_deref(), Some("new-upload"));
         assert!(!media.exists());
+    });
+}
+
+#[test]
+fn publishing_refuses_a_pending_clip_below_the_video_format() {
+    let setup = setup("pending");
+    let mut old = plan();
+    old["keep"] = json!([]);
+    old["annotations"] = json!([]);
+    old["end_ms"] = 480000.into();
+    let plans = json!([old]).to_string();
+    setup
+        .root
+        .db()
+        .with(move |c| Ok(c.execute("UPDATE selections SET clips = ?1", [plans])?))
+        .unwrap();
+    let server = Server::start(&setup.root, Some(&setup.providers), &[]);
+    let base = server.base.as_str();
+    setup.runtime.block_on(async {
+        let job = data(
+            &call(
+                base,
+                "blow",
+                "publish_clip",
+                json!({"clip_id": "aaaaaaaaaaa:01", "publish_at": setup.publish_at}),
+            )
+            .await,
+        );
+        let job = wait_job(base, "blow", &job).await;
+        assert_eq!(job["status"], "failed", "{job}");
+        assert!(job.to_string().contains("edit_video"), "{job}");
+        assert_eq!(setup.youtube.lock().unwrap().sessions, 0);
+        assert_eq!(row(&setup.root).status, "pending");
     });
 }
 

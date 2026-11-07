@@ -6,6 +6,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub const MIN_VIDEO_MS: i64 = 8 * 60 * 1000;
+/// Internal cuts every video needs: gaps between retained ranges.
+pub const MIN_CUTS: usize = 2;
+/// The opening card names the video's concept from the first second.
+const OPENING_BY_MS: i64 = 1000;
+const OPENING_MIN_MS: i64 = 4000;
 const EM_DASH: char = '\u{2014}';
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -141,6 +146,14 @@ impl ClipSelection {
         }
     }
 
+    /// Removed stretches inside the excerpt, between retained ranges.
+    pub fn internal_cuts(&self) -> usize {
+        self.keep
+            .windows(2)
+            .filter(|pair| pair[0].end_ms < pair[1].start_ms)
+            .count()
+    }
+
     /// The render contract: ordered, nonoverlapping, inside their intervals.
     pub fn validate(&self) -> Result<()> {
         length(&self.title, 1, usize::MAX, "title")?;
@@ -235,6 +248,29 @@ impl ClipSelection {
         if self.source.is_none() {
             bail!(
                 "Every video needs source name, verified streamed_on date, and date evidence. An upload date is not a stream date."
+            );
+        }
+        if self.internal_cuts() < MIN_CUTS {
+            bail!(
+                "Every video needs at least {MIN_CUTS} cuts inside it: keep ranges with real gaps between them (housekeeping, long silences, repetition, dead ends)."
+            );
+        }
+        let opening = self.annotations.first().filter(|card| {
+            card.start_ms <= OPENING_BY_MS
+                && card.end_ms - card.start_ms >= OPENING_MIN_MS
+                && card.heading.is_some()
+        });
+        if opening.is_none() {
+            bail!(
+                "Every video opens with a card naming its title or concept: the first annotation starts by 1000 ms, lasts at least 4 seconds and has a heading."
+            );
+        }
+        if !self.annotations[1..]
+            .iter()
+            .any(|card| matches!(card.label, Label::Context | Label::Reference))
+        {
+            bail!(
+                "Every video needs at least one later Context or Reference card explaining a term or concept the speaker uses."
             );
         }
         Ok(())
