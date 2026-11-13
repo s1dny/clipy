@@ -136,24 +136,21 @@ azalab-0):
 
 ## Production
 
-Forgejo CI runs one job on azalab-0 (`scripts/deliver.sh`) within a
-300-second budget: it builds the test image with a persistent Cargo cache,
-runs the E2E suite, then builds and pushes `git.aza.network/aza/clipy` from
-every `main` commit. Flux deploys it to azalab-0, and CI waits for
-`/releasez` to report that the server, site, Studio worker and agent all run
-the commit. The manifests are in the homelab repo under
-`flux/clusters/azalab-0/manifests/apps/clipy`.
+Pushing to `main` builds the Nix package (`flake.nix`); the homelab moves its
+pin once that passes, and azalab-0 switches to it. The units are in
+`nix/module.nix`; production's settings are in the homelab repo, under
+`modules/apps/clipy.nix`.
 
-The `clipy-agent` CronJob runs the agents every day at 04:00 Sydney time,
-for the channels named in its command. Tsoding is paused: it is left out, so
+The `clipy-agent` timer runs the agents every day at 04:00 Sydney time,
+for the channels the homelab names. Tsoding is paused: it is left out, so
 its agent makes and schedules nothing new. To run them now:
 
 ```bash
-ssh azalab-0 kubectl -n clipy create job --from=cronjob/clipy-agent agent-manual-$(date +%s)
+ssh azalab-0 sudo systemctl start --no-block clipy-agent
 ```
 
 The agent signs in with a long-lived token from `claude setup-token`, kept
-as `CLAUDE_CODE_OAUTH_TOKEN` in the `clipy-claude` secret. Replace it the
+as `CLAUDE_CODE_OAUTH_TOKEN` in clipy's environment file in the homelab's secrets. Replace it the
 same way if it ever expires.
 
 ## Configuration
@@ -166,7 +163,7 @@ win over both. Start from `config.toml.example`.
 
 | Variable | Used by | Meaning |
 |---|---|---|
-| `CLIPY_DATA_DIR` | everything | The data directory (`/data` in the image) |
+| `CLIPY_DATA_DIR` | everything | The data directory (`/var/lib/clipy` in production) |
 | `CLIPY_CONFIG` | everything | Path to `config.toml` |
 | `CLIPY_MCP_TOKEN` | server, agent | Bearer token for the server, at least 32 characters |
 | `ASSEMBLYAI_API_KEY` | server | Transcription |
@@ -198,7 +195,7 @@ The token is saved to `channels/<channel>/youtube-token.json`, only if it
 belongs to the channel's `handle`. Copy it to the server with:
 
 ```bash
-ssh azalab-0 "kubectl -n clipy exec -i deploy/clipy -- sh -c 'cat > /data/channels/<channel>/youtube-token.json && chmod 600 /data/channels/<channel>/youtube-token.json'" < channels/<channel>/youtube-token.json
+ssh azalab-0 "sudo -u clipy sh -c 'cat > /var/lib/clipy/channels/<channel>/youtube-token.json && chmod 600 /var/lib/clipy/channels/<channel>/youtube-token.json'" < channels/<channel>/youtube-token.json
 ```
 
 ## Running it locally

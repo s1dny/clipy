@@ -1,24 +1,22 @@
-name: Deliver
+name: CI
 
 on:
-  pull_request:
   push:
     branches: [main]
   workflow_dispatch:
 
 concurrency:
-  group: clipy-${{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  deliver:
+  # What production runs, built on azalab-1's runner, whose store is the cache both hosts
+  # deploy from; the homelab moves its pin to a commit once this passes.
+  package:
+    if: github.ref == 'refs/heads/main'
     runs-on: host
-    timeout-minutes: 5
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - name: Test, publish and verify production within five minutes
-        env:
-          FORGEJO_TOKEN: ${{ github.token }}
-          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
-          CLIPY_RELEASE_URL: http://10.43.100.200:8000/releasez
-        run: bash scripts/deliver.sh
+      - name: Build what production runs
+        run: nix --extra-experimental-features 'nix-command flakes' build "path:$PWD#default" --no-link
