@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 /// Post a Markdown message to $MATRIX_ROOM; returns its event id.
 pub async fn send(http: &reqwest::Client, text: &str) -> Result<String> {
     let homeserver = std::env::var("MATRIX_HOMESERVER")
-        .unwrap_or_else(|_| "http://tuwunel.tuwunel.svc:8008".into());
+        .unwrap_or_else(|_| "https://matrix.aza.network".into());
     let token = std::env::var("MATRIX_ACCESS_TOKEN").context("MATRIX_ACCESS_TOKEN is not set")?;
     let room = std::env::var("MATRIX_ROOM").context("MATRIX_ROOM is not set")?;
     let mut html = String::new();

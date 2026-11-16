@@ -177,7 +177,7 @@ win over both. Start from `config.toml.example`.
 | `CLIPY_AGENT_NOTE` | agent | A one-off instruction added to every channel's prompt |
 | `CLIPY_QUOTA_RETRY_SECONDS` | agent | Wait before retrying a usage limit hit before any tool ran (default 900, three attempts) |
 | `MATRIX_ACCESS_TOKEN`, `MATRIX_ROOM` | agent | The report bot's token and room; without a token no report is sent |
-| `MATRIX_HOMESERVER` | agent | Matrix homeserver URL (defaults to the one in the cluster) |
+| `MATRIX_HOMESERVER` | agent | Matrix homeserver URL (default `https://matrix.aza.network`) |
 | `YOUTUBE_CLIENT_SECRETS` | `clipy auth` | Google OAuth client file (default `client_secrets.json`) |
 
 ### Connecting a YouTube channel
