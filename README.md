@@ -9,7 +9,7 @@ hours if it is not monetized yet.
 | Channel | Who appears | Goal |
 |---|---|---|
 | [Jonathan Blow Clips](https://www.youtube.com/@JonathanBlowClips) (`blow`) | Jonathan Blow only | Ad revenue |
-| [DHH Clips](https://www.youtube.com/@DHHClipsDaily) (`dhh`) | David Heinemeier Hansson only | Watch hours |
+| [DHH Clips](https://www.youtube.com/@DHHClipsDaily) (`dhh`) | David Heinemeier Hansson only | Watch hours (paused) |
 | [George Hotz Clips](https://www.youtube.com/@georgehotzclips) (`hotz`) | George Hotz only | Watch hours |
 | [Tsoding Clips](https://www.youtube.com/@TsodingClips) (`tsoding`) | Tsoding only | Watch hours (paused) |
 
@@ -142,8 +142,8 @@ pin once that passes, and azalab-0 switches to it. The units are in
 `modules/apps/clipy.nix`.
 
 The `clipy-agent` timer runs the agents every day at 04:00 Sydney time,
-for the channels the homelab names. Tsoding is paused: it is left out, so
-its agent makes and schedules nothing new. To run them now:
+for the channels the homelab names. Tsoding and DHH are paused: they are left out, so
+their agents make and schedules nothing new. To run them now:
 
 ```bash
 ssh azalab-0 sudo systemctl start --no-block clipy-agent
