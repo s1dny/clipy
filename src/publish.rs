@@ -168,15 +168,17 @@ async fn check_format(app: &App, channel: &str, clip: &Clip) -> Result<()> {
 
 /// Upload a file through a resumable session. A dropped connection resumes
 /// the same session after asking how much arrived, so it can never insert a
-/// second video.
+/// second video. Chunks are read from disk as they are sent, so an upload
+/// never holds the whole MP4 in memory.
 pub async fn resumable_upload(
     app: &App,
     channel: &str,
     file: &Path,
     metadata: &Value,
 ) -> Result<Value> {
-    let bytes = tokio::fs::read(file).await?;
-    let total = bytes.len();
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+    let mut file = tokio::fs::File::open(file).await?;
+    let total = file.metadata().await?.len() as usize;
     let token = youtube::access_token(app, channel).await?;
     let response = app
         .http
@@ -202,6 +204,9 @@ pub async fn resumable_upload(
     let mut failures = 0;
     loop {
         let end = (offset + CHUNK).min(total);
+        let mut chunk = vec![0; end - offset];
+        file.seek(std::io::SeekFrom::Start(offset as u64)).await?;
+        file.read_exact(&mut chunk).await?;
         let attempt = app
             .http
             .put(&session)
@@ -211,7 +216,7 @@ pub async fn resumable_upload(
                 format!("bytes {offset}-{}/{total}", end.max(1) - 1),
             )
             .timeout(Duration::from_secs(600))
-            .body(bytes[offset..end].to_vec())
+            .body(chunk)
             .send()
             .await;
         let response = match attempt {
