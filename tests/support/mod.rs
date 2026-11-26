@@ -1,6 +1,6 @@
 //! End-to-end harness. The real `clipy` binary runs against local providers:
-//! a proxy terminates TLS for Google, Studio, OpenRouter, AssemblyAI and
-//! Kubernetes with a test CA, so the app uses its production URLs unchanged.
+//! a proxy terminates TLS for Google, Studio, OpenRouter and AssemblyAI with
+//! a test CA, so the app uses its production URLs unchanged.
 //! Media, SQLite, ffmpeg and HTTP clients all run for real.
 #![allow(dead_code)]
 
@@ -45,7 +45,7 @@ policy = "Goal: watch hours. Speaker: always Example Speaker."
 handle = "@ScienceClipsDaily"
 "#;
 
-const HOSTS: [&str; 11] = [
+const HOSTS: [&str; 10] = [
     "www.googleapis.com",
     "youtube.googleapis.com",
     "youtubeanalytics.googleapis.com",
@@ -55,7 +55,6 @@ const HOSTS: [&str; 11] = [
     "openrouter.ai",
     "api.assemblyai.com",
     "i.ytimg.com",
-    "kubernetes.test",
     "images.test",
 ];
 

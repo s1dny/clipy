@@ -16,7 +16,6 @@ pub mod pipeline;
 pub mod publish;
 pub mod queue;
 pub mod recovery;
-pub mod release;
 pub mod render;
 pub mod server;
 pub mod sources;

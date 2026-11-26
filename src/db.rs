@@ -176,7 +176,7 @@ CREATE TABLE studio_status (
 "#;
 
 /// One connection, shared; SQLite serialises writers anyway, and WAL lets the
-/// Studio pod's process read and write the same file alongside the server.
+/// Studio collector's process read and write the same file alongside the server.
 #[derive(Clone)]
 pub struct Db(Arc<Mutex<Connection>>);
 

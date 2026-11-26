@@ -779,7 +779,7 @@ async fn execute(channel_id: &str, endpoint: &str, payload: &Value) -> Result<Va
         .await
 }
 
-/// The browser pod's worker: drain queued Studio requests, never replaying
+/// The Studio service's worker: drain queued Studio requests, never replaying
 /// one whose outcome a crash or timeout left unknown.
 pub async fn serve_requests(app: Arc<App>) -> Result<()> {
     app.db

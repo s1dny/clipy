@@ -1,6 +1,6 @@
 //! The HTTP server: one MCP endpoint per channel at /mcp/<channel>, the
 //! observer's read-only endpoint at /observer, the report's stats header and
-//! health/release probes. Everything but the probes needs the bearer token.
+//! a health check. Everything but /healthz needs the bearer token.
 
 use std::sync::Arc;
 
@@ -24,7 +24,7 @@ fn same(a: &[u8], b: &[u8]) -> bool {
 }
 
 async fn gate(State(expected): State<Arc<String>>, request: Request, next: Next) -> Response {
-    if ["/healthz", "/releasez"].contains(&request.uri().path()) {
+    if request.uri().path() == "/healthz" {
         return next.run(request).await;
     }
     let supplied = request
@@ -63,18 +63,6 @@ pub async fn serve(app: Arc<App>) -> Result<()> {
 
     let mut router = Router::new()
         .route("/healthz", get(|| async { "ok" }))
-        .route(
-            "/releasez",
-            get(|| async {
-                let result = crate::release::readiness().await;
-                let status = if result["ready"] == true {
-                    StatusCode::OK
-                } else {
-                    StatusCode::SERVICE_UNAVAILABLE
-                };
-                (status, axum::Json(result))
-            }),
-        )
         .route(
             "/stats",
             get({
