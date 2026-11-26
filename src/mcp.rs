@@ -396,7 +396,7 @@ impl Channel {
             (None, None) => bail!("Read the prepared transcript and submit your clips first."),
         };
         if needs_artwork {
-            crate::thumbnails::check_artwork(&self.app, &config, &speaker)?;
+            crate::thumbnails::check_artwork(&self.app, &config, &speaker).await?;
         }
         let mut job_args = json!({"url": args.url, "speaker": speaker});
         if let Some(clips) = args.clips {
@@ -1252,7 +1252,7 @@ impl Channel {
             }
             None => None,
         };
-        match crate::thumbnails::panel_jpeg(&self.app, &args.speaker) {
+        match crate::thumbnails::panel_jpeg(&self.app, &args.speaker).await {
             Ok(jpeg) => {
                 let mut content = vec![ContentBlock::image(
                     base64::engine::general_purpose::STANDARD.encode(jpeg),

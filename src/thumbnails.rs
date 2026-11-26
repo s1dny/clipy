@@ -6,9 +6,11 @@
 //! are made by the agent itself and shared by every channel.
 
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use anyhow::{Context, Result, bail};
 use base64::Engine;
+use image::buffer::ConvertBuffer;
 use image::{
     DynamicImage, GrayImage, ImageReader, Luma, Rgb, RgbImage, RgbaImage, imageops::FilterType,
 };
@@ -42,13 +44,18 @@ pub fn headshot_path(app: &App, speaker: &str) -> Result<PathBuf> {
 }
 
 /// The speaker's headshot filling the panel: the widest 2:3 portrait of it,
-/// centred across and kept near the top so the head stays in.
-pub fn headshot_panel(app: &App, speaker: &str) -> Result<RgbImage> {
+/// centred across and kept near the top so the head stays in. Decoding and
+/// resizing run off the async runtime.
+pub async fn headshot_panel(app: &App, speaker: &str) -> Result<RgbImage> {
     let path = headshot_path(app, speaker)?;
     if !path.exists() {
         bail!("No headshot of {speaker}: find a photo and save it with the headshot tool.");
     }
-    let image = open_oriented(&path)?.to_rgb8();
+    tokio::task::spawn_blocking(move || panel(&path)).await?
+}
+
+fn panel(path: &Path) -> Result<RgbImage> {
+    let image = open_oriented(path)?.to_rgb8();
     let (w, h) = image.dimensions();
     let (x, y, cw, ch) = if w as u64 * PANEL.1 as u64 > h as u64 * PANEL.0 as u64 {
         // Too wide: trim the sides.
@@ -127,8 +134,8 @@ pub async fn save_headshot(
 }
 
 /// The thumbnail panel for a speaker, as a JPEG.
-pub fn panel_jpeg(app: &App, speaker: &str) -> Result<Vec<u8>> {
-    let panel = headshot_panel(app, speaker)?;
+pub async fn panel_jpeg(app: &App, speaker: &str) -> Result<Vec<u8>> {
+    let panel = headshot_panel(app, speaker).await?;
     let mut bytes = Vec::new();
     image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 90).encode_image(&panel)?;
     Ok(bytes)
@@ -145,21 +152,13 @@ fn open_oriented(path: &Path) -> Result<DynamicImage> {
     Ok(image)
 }
 
-/// The thumbnail before its illustration.
-fn left(app: &App, config: &ChannelConfig, speaker: Option<&str>) -> Result<RgbImage> {
-    if let Some(template) = &config.thumbnail_template {
-        let path = app.data.join("thumbnails").join(template);
-        let image = image::open(&path).with_context(|| format!("open {}", path.display()))?;
-        return Ok(image
-            .resize_exact(SIZE.0, SIZE.1, FilterType::Lanczos3)
-            .to_rgb8());
-    }
-    let speaker = speaker.context("This channel's thumbnails need the clip's speaker.")?;
-    let panel = headshot_panel(app, speaker)?;
+/// The white canvas with the headshot panel's soft shadow. It is the same for
+/// every headshot thumbnail, so it is blurred once.
+static SHADOWED: LazyLock<RgbImage> = LazyLock::new(|| {
     let mut canvas = RgbImage::from_pixel(SIZE.0, SIZE.1, Rgb([255, 255, 255]));
     let mut shade = GrayImage::new(SIZE.0, SIZE.1);
     for y in 0..SIZE.1 {
-        for x in 0..(panel.width() + SHADOW / 3).min(SIZE.0) {
+        for x in 0..(PANEL.0 + SHADOW / 3).min(SIZE.0) {
             shade.put_pixel(x, y, Luma([255]));
         }
     }
@@ -170,8 +169,30 @@ fn left(app: &App, config: &ChannelConfig, speaker: Option<&str>) -> Result<RgbI
             pixel[c] = ((pixel[c] as u32 * (255 - a) + 150 * a) / 255) as u8;
         }
     }
-    image::imageops::replace(&mut canvas, &panel, 0, 0);
-    Ok(canvas)
+    canvas
+});
+
+/// The thumbnail before its illustration.
+async fn left(app: &App, config: &ChannelConfig, speaker: Option<&str>) -> Result<RgbImage> {
+    let Some(template) = &config.thumbnail_template else {
+        let speaker = speaker.context("This channel's thumbnails need the clip's speaker.")?;
+        let panel = headshot_panel(app, speaker).await?;
+        return tokio::task::spawn_blocking(move || {
+            let mut canvas = SHADOWED.clone();
+            image::imageops::replace(&mut canvas, &panel, 0, 0);
+            canvas
+        })
+        .await
+        .map_err(Into::into);
+    };
+    let path = app.data.join("thumbnails").join(template);
+    tokio::task::spawn_blocking(move || {
+        let image = image::open(&path).with_context(|| format!("open {}", path.display()))?;
+        Ok(image
+            .resize_exact(SIZE.0, SIZE.1, FilterType::Lanczos3)
+            .to_rgb8())
+    })
+    .await?
 }
 
 async fn illustration(
@@ -254,9 +275,9 @@ pub fn compose(left: &RgbImage, illustration: &RgbaImage) -> Result<RgbImage> {
         .map_or(0, |x| x + 1);
     let x = (start + SIZE.0) as i64 / 2 - drawn.width() as i64 / 2;
     let y = SIZE.1 as i64 / 2 - drawn.height() as i64 / 2;
-    let mut thumbnail = DynamicImage::ImageRgb8(left.clone()).to_rgba8();
+    let mut thumbnail: RgbaImage = left.convert();
     image::imageops::overlay(&mut thumbnail, &drawn, x, y);
-    Ok(DynamicImage::ImageRgba8(thumbnail).to_rgb8())
+    Ok(thumbnail.convert())
 }
 
 /// Draw a thumbnail for `prompt` into `path` (a JPEG).
@@ -269,7 +290,7 @@ pub async fn draw(
 ) -> Result<()> {
     let config = app.channel_config(channel)?;
     // Fails fast, before paying for an image.
-    let left = left(app, &config, speaker)?;
+    let left = left(app, &config, speaker).await?;
     let illustration = illustration(app, prompt, &config, &app.config.image_model).await?;
     let path = path.to_owned();
     tokio::task::spawn_blocking(move || -> Result<()> {
@@ -285,9 +306,9 @@ pub async fn draw(
 
 /// Whether a thumbnail could be drawn for this channel and speaker without
 /// the agent first making a headshot.
-pub fn check_artwork(app: &App, config: &ChannelConfig, speaker: &str) -> Result<()> {
+pub async fn check_artwork(app: &App, config: &ChannelConfig, speaker: &str) -> Result<()> {
     if config.thumbnail_template.is_none() {
-        headshot_panel(app, speaker)?;
+        headshot_panel(app, speaker).await?;
     }
     Ok(())
 }
