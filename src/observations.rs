@@ -210,7 +210,7 @@ pub fn channel_reading(c: &rusqlite::Connection, channel: &str) -> Result<Option
 pub fn start_sampler(app: Arc<App>) {
     tokio::spawn(async move {
         loop {
-            for channel in app.channel_names().unwrap_or_default() {
+            for channel in app.config.names() {
                 let result = async {
                     snapshot(&app, &channel).await?;
                     let videos = youtube::channel_videos(&app, &channel, false).await?;

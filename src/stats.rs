@@ -77,7 +77,7 @@ fn signed(n: f64) -> String {
 }
 
 pub fn report(app: &App) -> Result<String> {
-    let channels = app.channel_names()?;
+    let channels = app.config.names();
     let mut handles = BTreeMap::new();
     let mut data: Vec<(String, Daily, bool)> = Vec::new();
     let mut unavailable: Vec<(String, String)> = Vec::new();

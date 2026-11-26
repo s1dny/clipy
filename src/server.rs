@@ -50,7 +50,7 @@ pub async fn serve(app: Arc<App>) -> Result<()> {
     if token.len() < 32 {
         bail!("CLIPY_MCP_TOKEN must be set to at least 32 characters.");
     }
-    let channels = app.channel_names()?;
+    let channels = app.config.names();
     for channel in &channels {
         // Fail fast on a broken config.toml.
         app.channel_config(channel)?;

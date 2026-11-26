@@ -697,7 +697,7 @@ pub async fn collect_all(app: &App, only: Option<&str>) -> Result<bool> {
     let mut client = Client::new().await?;
     let channels = match only {
         Some(channel) => vec![channel.to_owned()],
-        None => app.channel_names()?,
+        None => app.config.names(),
     };
     let mut ok = true;
     for channel in channels {

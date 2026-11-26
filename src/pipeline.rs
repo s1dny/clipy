@@ -39,7 +39,7 @@ pub async fn prepare(app: &App, url: &str, include_video: bool, log: &JobLog) ->
             let audio = download_audio(app, &source, log).await?;
             log.info("Transcribing audio with AssemblyAI");
             let transcript =
-                transcribe::transcribe(&app.http, &audio, &app.config()?.speech_model).await?;
+                transcribe::transcribe(&app.http, &audio, &app.config.speech_model).await?;
             let sentences = transcribe::sentences(&transcript);
             let (id, text) = (source.clone(), serde_json::to_string(&sentences)?);
             app.db

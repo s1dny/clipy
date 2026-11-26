@@ -344,7 +344,6 @@ pub async fn sample(app: &App, url: &str, start_seconds: f64, end_seconds: f64) 
     if duration > 0.0 && end_seconds > duration {
         bail!("The sample extends beyond the source video.");
     }
-    let config = app.config()?;
     let work = std::env::temp_dir().join(format!("clipy-sample-{}", uuid::Uuid::new_v4().simple()));
     tokio::fs::create_dir_all(&work).await?;
     let result = async {
@@ -371,7 +370,7 @@ pub async fn sample(app: &App, url: &str, start_seconds: f64, end_seconds: f64) 
         if !part.is_file() {
             bail!("yt-dlp downloaded no audio sample.");
         }
-        crate::transcribe::transcribe(&app.http, &part, &config.speech_model).await
+        crate::transcribe::transcribe(&app.http, &part, &app.config.speech_model).await
     }
     .await;
     let _ = tokio::fs::remove_dir_all(&work).await;

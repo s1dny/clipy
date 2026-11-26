@@ -85,7 +85,7 @@ async fn run(cli: Cli) -> Result<bool> {
     }
     let app = app::App::from_env()?;
     let known = |channel: &str| -> Result<()> {
-        if !app.config()?.has(channel) {
+        if !app.config.has(channel) {
             bail!("config.toml has no [channels.{channel}]");
         }
         Ok(())

@@ -16,9 +16,8 @@ pub struct App {
     /// Channel media, credentials, thumbnail templates, headshots and the
     /// database.
     pub data: PathBuf,
-    /// Bundled read-only resources: the agent's prompts in agent/.
-    pub home: PathBuf,
-    pub config_path: PathBuf,
+    /// config.toml, read once at start; a changed file applies on restart.
+    pub config: Config,
     pub db: Db,
     pub http: reqwest::Client,
     /// Timezone for notebook entries.
@@ -29,34 +28,23 @@ pub struct App {
 impl App {
     pub fn from_env() -> Result<Arc<Self>> {
         let data = PathBuf::from(std::env::var("CLIPY_DATA_DIR").unwrap_or_else(|_| ".".into()));
-        let home = std::env::current_dir()?;
-        let config_path = std::env::var("CLIPY_CONFIG")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| home.join("config.toml"));
+        let config_path = match std::env::var("CLIPY_CONFIG") {
+            Ok(path) => PathBuf::from(path),
+            Err(_) => std::env::current_dir()?.join("config.toml"),
+        };
+        let config = Config::load(&config_path)?;
         let timezone_name =
             std::env::var("CLIPY_TIMEZONE").unwrap_or_else(|_| "Australia/Sydney".into());
         std::fs::create_dir_all(&data)?;
-        let app = Self {
+        Ok(Arc::new(Self {
             db: Db::open(&data.join("clipy.db"))?,
             data,
-            home,
-            config_path,
+            config,
             http: http_client(Duration::from_secs(120))?,
             timezone: TimeZone::get(&timezone_name)
                 .with_context(|| format!("Unknown CLIPY_TIMEZONE {timezone_name}"))?,
             youtube: Default::default(),
-        };
-        app.config()?;
-        Ok(Arc::new(app))
-    }
-
-    /// Read fresh each time, so edits to config.toml apply at once.
-    pub fn config(&self) -> Result<Config> {
-        Config::load(&self.config_path)
-    }
-
-    pub fn channel_names(&self) -> Result<Vec<String>> {
-        Ok(self.config()?.names())
+        }))
     }
 
     /// A channel's settings with the agent's prompt overrides applied.
@@ -69,7 +57,7 @@ impl App {
                 .collect::<rusqlite::Result<_>>()?;
             Ok(rows)
         })?;
-        self.config()?.channel(channel, &overrides)
+        self.config.channel(channel, &overrides)
     }
 
     pub fn channel_dir(&self, channel: &str) -> PathBuf {

@@ -268,10 +268,9 @@ pub async fn draw(
     path: &Path,
 ) -> Result<()> {
     let config = app.channel_config(channel)?;
-    let model = app.config()?.image_model;
     // Fails fast, before paying for an image.
     let left = left(app, &config, speaker)?;
-    let illustration = illustration(app, prompt, &config, &model).await?;
+    let illustration = illustration(app, prompt, &config, &app.config.image_model).await?;
     let path = path.to_owned();
     tokio::task::spawn_blocking(move || -> Result<()> {
         let thumbnail = compose(&left, &illustration)?;
