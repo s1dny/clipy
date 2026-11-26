@@ -98,7 +98,7 @@ pub fn full_description(clip: &Clip, template: Option<&str>, live: Option<&str>)
 }
 
 /// Check a clip may be published before any request reaches YouTube.
-async fn check_release(app: &App, clip: &Clip, video: &Path) -> Result<()> {
+async fn check_release(clip: &Clip, video: &Path) -> Result<()> {
     if clip.title.contains('\u{2014}') {
         bail!("Em dashes are not allowed in video titles.");
     }
@@ -115,8 +115,7 @@ async fn check_release(app: &App, clip: &Clip, video: &Path) -> Result<()> {
             "Every video must be rendered with its verified stream date and source visible. Re-render this pending clip first."
         );
     }
-    let ffmpeg = app.config()?.ffmpeg;
-    let media = crate::render::media_info(video, &ffmpeg).await?;
+    let media = crate::render::media_info(video).await?;
     let duration = |kind: &str| -> f64 {
         media["streams"]
             .as_array()
@@ -282,7 +281,7 @@ pub async fn upload(
     private: bool,
 ) -> Result<String> {
     let video = clip.video_path(app);
-    check_release(app, clip, &video).await?;
+    check_release(clip, &video).await?;
     let status = match &clip.publish_at {
         Some(when) => json!({"privacyStatus": "private", "publishAt": when}),
         None => json!({"privacyStatus": if private { "private" } else { "public" }}),

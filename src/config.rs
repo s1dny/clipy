@@ -1,4 +1,4 @@
-//! config.toml: models, ffmpeg, and each channel's settings and prompts.
+//! config.toml: models, and each channel's settings and prompts.
 //!
 //! A channel's settings are [defaults], then [channels.<name>] on top, then
 //! the agent's prompt overrides (stored in the database).
@@ -14,12 +14,6 @@ pub const PROMPT_KEYS: [&str; 3] = [
     "illustration_prompt_template",
     "description_template",
 ];
-
-#[derive(Debug, Clone, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-struct Runtime {
-    ffmpeg_path: Option<String>,
-}
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -44,8 +38,6 @@ pub struct ChannelTable {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct File {
-    #[serde(default)]
-    runtime: Runtime,
     #[serde(default)]
     models: Models,
     #[serde(default)]
@@ -84,7 +76,6 @@ impl ChannelConfig {
 
 #[derive(Debug, Clone)]
 pub struct Config {
-    pub ffmpeg: String,
     pub image_model: String,
     pub speech_model: String,
     /// Channels in config.toml order.
@@ -120,7 +111,6 @@ impl Config {
             channels.push((name, merged));
         }
         let config = Self {
-            ffmpeg: file.runtime.ffmpeg_path.unwrap_or_else(|| "ffmpeg".into()),
             image_model: file
                 .models
                 .image

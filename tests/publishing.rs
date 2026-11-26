@@ -109,7 +109,6 @@ fn setup(status: &str) -> Setup {
             &output,
             &root.path().join("assets"),
             &http,
-            "ffmpeg",
         ))
         .unwrap();
     let publish_at = (jiff::Timestamp::now() + jiff::SignedDuration::from_hours(48))

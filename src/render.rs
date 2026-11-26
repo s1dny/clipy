@@ -16,19 +16,21 @@ const X264: [&str; 8] = [
 ];
 const AAC: [&str; 4] = ["-c:a", "aac", "-b:a", "192k"];
 
-pub fn ffprobe(ffmpeg: &str) -> PathBuf {
-    Path::new(ffmpeg).with_file_name("ffprobe")
-}
-
+/// Run ffmpeg or ffprobe (from PATH) and return its stdout.
 async fn run(command: &mut Command) -> Result<Vec<u8>> {
+    let program = command
+        .as_std()
+        .get_program()
+        .to_string_lossy()
+        .into_owned();
     let output = command
         .stdin(std::process::Stdio::null())
         .output()
         .await
-        .context("could not start ffmpeg")?;
+        .with_context(|| format!("could not start {program}"))?;
     if !output.status.success() {
         bail!(
-            "ffmpeg failed: {}",
+            "{program} failed: {}",
             crate::app::tail(&String::from_utf8_lossy(&output.stderr), 500)
         );
     }
@@ -36,8 +38,8 @@ async fn run(command: &mut Command) -> Result<Vec<u8>> {
 }
 
 /// ffprobe's streams and format, as JSON.
-pub async fn media_info(path: &Path, ffmpeg: &str) -> Result<Value> {
-    let out = run(Command::new(ffprobe(ffmpeg))
+pub async fn media_info(path: &Path) -> Result<Value> {
+    let out = run(Command::new("ffprobe")
         .args([
             "-v",
             "error",
@@ -51,8 +53,7 @@ pub async fn media_info(path: &Path, ffmpeg: &str) -> Result<Value> {
     Ok(serde_json::from_slice(&out)?)
 }
 
-pub async fn duration_seconds(path: &Path, ffmpeg: &str) -> f64 {
-    let info = media_info(path, ffmpeg).await.unwrap_or_default();
+fn duration_seconds(info: &Value) -> f64 {
     info["format"]["duration"]
         .as_str()
         .and_then(|d| d.parse().ok())
@@ -60,11 +61,11 @@ pub async fn duration_seconds(path: &Path, ffmpeg: &str) -> f64 {
 }
 
 /// One JPEG frame at a timestamp.
-pub async fn frame(path: &Path, at_ms: i64, ffmpeg: &str) -> Result<Vec<u8>> {
+pub async fn frame(path: &Path, at_ms: i64) -> Result<Vec<u8>> {
     if at_ms < 0 {
         bail!("Frame timestamp must be nonnegative.");
     }
-    let out = run(Command::new(ffmpeg)
+    let out = run(Command::new("ffmpeg")
         .args(["-v", "error", "-ss", &seconds(at_ms), "-i"])
         .arg(path)
         .args([
@@ -152,10 +153,9 @@ pub async fn render(
     output: &Path,
     assets: &Path,
     http: &reqwest::Client,
-    ffmpeg: &str,
 ) -> Result<Value> {
     let mut report = edit_report(selection);
-    let info = media_info(video, ffmpeg).await?;
+    let info = media_info(video).await?;
     let stream = info["streams"]
         .as_array()
         .and_then(|s| s.iter().find(|s| s["codec_type"] == "video"))
@@ -175,7 +175,7 @@ pub async fn render(
         "-t".to_owned(),
         seconds(selection.end_ms - selection.start_ms),
     ];
-    let mut command = Command::new(ffmpeg);
+    let mut command = Command::new("ffmpeg");
     command
         .args(["-v", "error", "-y"])
         .args(&seek)
@@ -237,7 +237,7 @@ pub async fn render(
     // Full-screen frame holds preserve the speaker's EXISTING drawing.
     for (i, hold) in selection.visual_holds.iter().enumerate() {
         let still = work.path().join(format!("hold-{i}.jpg"));
-        tokio::fs::write(&still, frame(video, hold.source_ms, ffmpeg).await?).await?;
+        tokio::fs::write(&still, frame(video, hold.source_ms).await?).await?;
         overlay(
             &mut command,
             &still,
@@ -282,7 +282,7 @@ pub async fn render(
         .arg(&partial);
     let result = async {
         run(&mut command).await?;
-        let verification = verify(&partial, selection.duration_ms(), ffmpeg).await?;
+        let verification = verify(&partial, selection.duration_ms()).await?;
         tokio::fs::rename(&partial, output).await?;
         Ok::<_, anyhow::Error>(verification)
     }
@@ -293,8 +293,8 @@ pub async fn render(
 }
 
 /// Both streams present and the expected length, within 0.2 seconds.
-pub async fn verify(path: &Path, duration_ms: i64, ffmpeg: &str) -> Result<Value> {
-    let metadata = media_info(path, ffmpeg).await?;
+pub async fn verify(path: &Path, duration_ms: i64) -> Result<Value> {
+    let metadata = media_info(path).await?;
     let kinds: Vec<&str> = metadata["streams"]
         .as_array()
         .into_iter()
@@ -304,7 +304,7 @@ pub async fn verify(path: &Path, duration_ms: i64, ffmpeg: &str) -> Result<Value
     if !(kinds.contains(&"audio") && kinds.contains(&"video")) {
         bail!("Edited output is missing audio or video.");
     }
-    let actual = duration_seconds(path, ffmpeg).await;
+    let actual = duration_seconds(&metadata);
     let expected = duration_ms as f64 / 1000.0;
     if (actual - expected).abs() > 0.2 {
         bail!("Edited duration mismatch: {actual}s vs {expected}s.");

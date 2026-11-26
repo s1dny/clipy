@@ -114,7 +114,6 @@ async fn rebuild(app: &App, clip: &mut Clip, log: &JobLog) -> Result<()> {
         .context("The clip's saved selection is missing.")?;
     let video = crate::sources::download_video(app, &clip.source_id, log).await?;
     let audio = crate::sources::download_audio(app, &clip.source_id, log).await?;
-    let config = app.config()?;
     let report = crate::render::render(
         &video,
         &audio,
@@ -122,7 +121,6 @@ async fn rebuild(app: &App, clip: &mut Clip, log: &JobLog) -> Result<()> {
         &clip.video_path(app),
         &clip.dir(app).join("assets"),
         &app.http,
-        &config.ffmpeg,
     )
     .await
     .context("Could not rebuild the clip; the original upload is unchanged.")?;

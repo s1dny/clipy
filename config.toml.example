@@ -3,9 +3,6 @@
 # Per-channel editorial guidance belongs to the agent (update_prompts, kept
 # in clipy.db); the default here only seeds a new channel.
 
-[runtime]
-ffmpeg_path = "ffmpeg"
-
 [models]
 image = "bytedance-seed/seedream-5-0-lite"
 speech = "universal-3-5-pro"

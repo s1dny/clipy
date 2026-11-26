@@ -30,7 +30,8 @@ ads.
 
 ## Installation
 
-Clipy needs Rust, ffmpeg, yt-dlp and [Claude Code](https://claude.com/claude-code).
+Clipy needs Rust, ffmpeg, yt-dlp and [Claude Code](https://claude.com/claude-code),
+and runs `ffmpeg`, `ffprobe`, `yt-dlp` and `claude` from PATH.
 
 ```
 cargo install --path .

@@ -174,7 +174,6 @@ pub async fn process(
     if clips.is_empty() {
         return Ok(0);
     }
-    let config = app.config()?;
     let audio = download_audio(app, &source, log).await?;
     let mut failed = Vec::new();
     for attempt in 0..2 {
@@ -184,7 +183,7 @@ pub async fn process(
             let number = index as i64 + 1;
             let output = app.clip_dir(channel, &source, number).join("video.mp4");
             if output.exists() {
-                ensure_row(app, channel, &source, number, speaker, clip, &config.ffmpeg).await?;
+                ensure_row(app, channel, &source, number, speaker, clip).await?;
                 continue;
             }
             if video.is_none() {
@@ -199,7 +198,6 @@ pub async fn process(
                 &output,
                 &assets,
                 &app.http,
-                &config.ffmpeg,
             )
             .await
             {
@@ -245,7 +243,6 @@ async fn ensure_row(
     number: i64,
     speaker: &str,
     clip: &ClipSelection,
-    ffmpeg: &str,
 ) -> Result<()> {
     let id = format!("{source}:{number:02}");
     let exists = {
@@ -257,7 +254,7 @@ async fn ensure_row(
     if !exists {
         let mut report = render::edit_report(clip);
         let output = app.clip_dir(channel, source, number).join("video.mp4");
-        report["verification"] = render::verify(&output, clip.duration_ms(), ffmpeg).await?;
+        report["verification"] = render::verify(&output, clip.duration_ms()).await?;
         insert(app, channel, source, number, speaker, clip, report).await?;
     }
     Ok(())
@@ -396,7 +393,6 @@ pub async fn edit_pending(
     let output = clip.video_path(app);
     let edited = output.with_file_name("edited.mp4");
     log.info(format!("Re-rendering {clip_id}"));
-    let config = app.config()?;
     let report = render::render(
         &video,
         &audio,
@@ -404,7 +400,6 @@ pub async fn edit_pending(
         &edited,
         &clip.dir(app).join("assets"),
         &app.http,
-        &config.ffmpeg,
     )
     .await?;
     tokio::fs::rename(&edited, &output).await?;

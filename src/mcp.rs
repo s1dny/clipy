@@ -834,7 +834,7 @@ impl Channel {
                 let source = video_id(&args.url)?;
                 let path = crate::sources::downloaded(&self.app.source_dir(&source), "video")
                     .context("Prepare the source with include_video=true first.")?;
-                crate::render::frame(&path, args.at_ms, &self.app.config()?.ffmpeg).await
+                crate::render::frame(&path, args.at_ms).await
             }
             .await,
         )
@@ -854,7 +854,7 @@ impl Channel {
                 if !path.is_file() {
                     bail!("The local clip has been reclaimed or has not rendered.");
                 }
-                crate::render::frame(&path, args.at_ms, &self.app.config()?.ffmpeg).await
+                crate::render::frame(&path, args.at_ms).await
             }
             .await,
         )
@@ -870,7 +870,7 @@ impl Channel {
                 let clip = self.clip(&args.clip_id).await?;
                 let path = clip.video_path(&self.app);
                 let media = if path.is_file() {
-                    crate::render::media_info(&path, &self.app.config()?.ffmpeg).await?
+                    crate::render::media_info(&path).await?
                 } else {
                     Value::Null
                 };
