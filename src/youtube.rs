@@ -50,7 +50,7 @@ pub struct Cache {
 }
 
 /// One upload on the channel, private and scheduled ones included.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct Video {
     pub id: String,
     pub title: String,
@@ -59,11 +59,6 @@ pub struct Video {
     pub privacy: String,
     pub upload_status: Option<String>,
     pub processing_status: Option<String>,
-    pub processing_failure_reason: Option<String>,
-    pub failure_reason: Option<String>,
-    pub rejection_reason: Option<String>,
-    pub uploaded_at: String,
-    pub thumbnails: Value,
     pub publish_time: String,
     pub duration_seconds: i64,
     pub views: i64,
@@ -305,12 +300,10 @@ fn count(value: &Value) -> i64 {
         .unwrap_or(0)
 }
 
-pub fn video_summary(v: &Value) -> Video {
+fn video_summary(v: &Value) -> Video {
     let snippet = &v["snippet"];
     let status = &v["status"];
-    let processing = &v["processingDetails"];
     let stats = &v["statistics"];
-    let published = text(&snippet["publishedAt"]).unwrap_or_default();
     Video {
         id: text(&v["id"]).unwrap_or_default(),
         title: text(&snippet["title"]).unwrap_or_default(),
@@ -318,13 +311,10 @@ pub fn video_summary(v: &Value) -> Video {
         tags: serde_json::from_value(snippet["tags"].clone()).unwrap_or_default(),
         privacy: text(&status["privacyStatus"]).unwrap_or_default(),
         upload_status: text(&status["uploadStatus"]),
-        processing_status: text(&processing["processingStatus"]),
-        processing_failure_reason: text(&processing["processingFailureReason"]),
-        failure_reason: text(&status["failureReason"]),
-        rejection_reason: text(&status["rejectionReason"]),
-        thumbnails: snippet["thumbnails"].clone(),
-        publish_time: text(&status["publishAt"]).unwrap_or_else(|| published.clone()),
-        uploaded_at: published,
+        processing_status: text(&v["processingDetails"]["processingStatus"]),
+        publish_time: text(&status["publishAt"])
+            .or_else(|| text(&snippet["publishedAt"]))
+            .unwrap_or_default(),
         duration_seconds: iso_duration_seconds(
             v["contentDetails"]["duration"].as_str().unwrap_or(""),
         ),
