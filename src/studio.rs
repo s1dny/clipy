@@ -5,7 +5,7 @@
 //! Chromium is only used to recover a login and to run Studio's native
 //! request service; analytics collection never renders pages.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -598,7 +598,7 @@ async fn collect(app: &App, channel: &str, client: &mut Client) -> Result<Value>
         .collect();
     let mut targets: Vec<String> = experiment_videos(app, channel).await?;
     targets.extend(public.iter().take(5).cloned());
-    let mut seen = std::collections::BTreeSet::new();
+    let mut seen = BTreeSet::new();
     targets.retain(|id| public.contains(id) && seen.insert(id.clone()));
     targets.truncate(10);
 
@@ -864,6 +864,42 @@ async fn finish(app: &App, id: &str, outcome: Result<Value>) -> Result<()> {
         .await
 }
 
+/// Collect the videos a Studio payload targets; any channel it names must be
+/// this one.
+fn targets(value: &Value, channel_id: &str, videos: &mut BTreeSet<String>) -> Result<()> {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map {
+                // Masks describe requested fields; their booleans are not targets.
+                if ["mask", "videoReadMask", "updateMask"].contains(&key.as_str()) {
+                    continue;
+                }
+                if ["channelId", "externalChannelId"].contains(&key.as_str()) && child != channel_id
+                {
+                    bail!("Studio requests must stay within this channel.");
+                }
+                match (key.as_str(), child) {
+                    ("videoId" | "encryptedVideoId", Value::String(id)) => {
+                        videos.insert(id.clone());
+                    }
+                    ("videoIds", Value::Array(ids)) => {
+                        videos.extend(ids.iter().filter_map(|i| i.as_str().map(str::to_owned)));
+                    }
+                    _ => {}
+                }
+                targets(child, channel_id, videos)?;
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                targets(item, channel_id, videos)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 /// The channel tool: check every target belongs to this channel, journal the
 /// request, hand it to the browser worker and wait for its outcome.
 pub async fn request(
@@ -878,49 +914,11 @@ pub async fn request(
         .as_str()
         .context("channel id")?
         .to_owned();
-    let mut videos = std::collections::BTreeSet::new();
-    fn walk(
-        value: &Value,
-        channel_id: &str,
-        videos: &mut std::collections::BTreeSet<String>,
-    ) -> Result<()> {
-        match value {
-            Value::Object(map) => {
-                for (key, child) in map {
-                    // Masks describe requested fields; their booleans are not targets.
-                    if ["mask", "videoReadMask", "updateMask"].contains(&key.as_str()) {
-                        continue;
-                    }
-                    if ["channelId", "externalChannelId"].contains(&key.as_str())
-                        && child != channel_id
-                    {
-                        bail!("Studio requests must stay within this channel.");
-                    }
-                    match (key.as_str(), child) {
-                        ("videoId" | "encryptedVideoId", Value::String(id)) => {
-                            videos.insert(id.clone());
-                        }
-                        ("videoIds", Value::Array(ids)) => {
-                            videos.extend(ids.iter().filter_map(|i| i.as_str().map(str::to_owned)));
-                        }
-                        _ => {}
-                    }
-                    walk(child, channel_id, videos)?;
-                }
-            }
-            Value::Array(items) => {
-                for item in items {
-                    walk(item, channel_id, videos)?;
-                }
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-    walk(&payload, &channel_id, &mut videos)?;
+    let mut videos = BTreeSet::new();
+    targets(&payload, &channel_id, &mut videos)?;
     let ids: Vec<String> = videos.into_iter().collect();
     let found = youtube::videos(app, channel, &ids, "snippet").await?;
-    let owned: std::collections::BTreeSet<&str> = found
+    let owned: BTreeSet<&str> = found
         .iter()
         .filter(|v| v["snippet"]["channelId"] == channel_id.as_str())
         .filter_map(|v| v["id"].as_str())
