@@ -191,6 +191,24 @@ pub fn pending(c: &Connection, channel: &str, clip_id: &str) -> Result<Clip> {
     Ok(clip)
 }
 
+/// `get` from async code.
+pub async fn load(app: &App, channel: &str, clip_id: &str) -> Result<Clip> {
+    let (channel, id) = (channel.to_owned(), clip_id.to_owned());
+    app.db.call(move |c| get(c, &channel, &id)).await
+}
+
+/// `pending` from async code.
+pub async fn load_pending(app: &App, channel: &str, clip_id: &str) -> Result<Clip> {
+    let (channel, id) = (channel.to_owned(), clip_id.to_owned());
+    app.db.call(move |c| pending(c, &channel, &id)).await
+}
+
+/// `Clip::save` from async code.
+pub async fn store(app: &App, clip: &Clip) -> Result<()> {
+    let clip = clip.clone();
+    app.db.call(move |c| clip.save(c)).await
+}
+
 /// The channel's clips in queue order; `status` "all" lists every one.
 pub fn list(c: &Connection, channel: &str, status: &str) -> Result<Vec<Clip>> {
     let mut statement = c.prepare(

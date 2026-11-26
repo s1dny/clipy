@@ -244,14 +244,10 @@ async fn ensure_row(
     speaker: &str,
     clip: &ClipSelection,
 ) -> Result<()> {
-    let id = format!("{source}:{number:02}");
-    let exists = {
-        let (channel, id) = (channel.to_owned(), id.clone());
-        app.db
-            .call(move |c| Ok(queue::get(c, &channel, &id).is_ok()))
-            .await?
-    };
-    if !exists {
+    if queue::load(app, channel, &format!("{source}:{number:02}"))
+        .await
+        .is_err()
+    {
         let mut report = render::edit_report(clip);
         let output = app.clip_dir(channel, source, number).join("video.mp4");
         report["verification"] = render::verify(&output, clip.duration_ms()).await?;
@@ -317,12 +313,8 @@ async fn draw_thumbnails(
     let work = futures::stream::iter(1..=count as i64)
         .map(|number| async move {
             let id = format!("{source}:{number:02}");
-            let clip = {
-                let (channel, id) = (channel.to_owned(), id.clone());
-                match app.db.call(move |c| queue::get(c, &channel, &id)).await {
-                    Ok(clip) => clip,
-                    Err(_) => return false,
-                }
+            let Ok(clip) = queue::load(app, channel, &id).await else {
+                return false;
             };
             let path = clip.thumbnail_path(app);
             if path.exists() {
@@ -363,12 +355,7 @@ pub async fn edit_pending(
     changes: &Value,
     log: &JobLog,
 ) -> Result<Value> {
-    let clip = {
-        let (channel, id) = (channel.to_owned(), clip_id.to_owned());
-        app.db
-            .call(move |c| queue::pending(c, &channel, &id))
-            .await?
-    };
+    let mut clip = queue::load_pending(app, channel, clip_id).await?;
     let (speaker, mut plans) = saved_selections(app, channel, &clip.source_id)
         .await?
         .context("The clip's saved selections are missing.")?;
@@ -403,13 +390,12 @@ pub async fn edit_pending(
     )
     .await?;
     tokio::fs::rename(&edited, &output).await?;
-    plans[index] = selection.clone();
-    save_selections(app, channel, &clip.source_id, &speaker, &plans).await?;
-    let mut clip = clip;
     clip.source = selection.source.clone();
     clip.chapters = selection.chapters.clone();
     clip.duration_ms = selection.duration_ms();
     clip.edit_report = Some(report);
-    app.db.call(move |c| clip.save(c)).await?;
+    plans[index] = selection;
+    save_selections(app, channel, &clip.source_id, &speaker, &plans).await?;
+    queue::store(app, &clip).await?;
     Ok(clip_id.into())
 }

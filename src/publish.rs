@@ -337,11 +337,6 @@ pub async fn set_thumbnail(app: &App, clip: &mut Clip) -> bool {
     }
 }
 
-async fn save(app: &App, clip: &Clip) -> Result<()> {
-    let clip = clip.clone();
-    app.db.call(move |c| clip.save(c)).await
-}
-
 /// The publish job: upload a pending clip, or reconcile a failed one with
 /// YouTube before ever starting another upload session.
 pub async fn publish(
@@ -351,10 +346,7 @@ pub async fn publish(
     publish_at: Option<String>,
     log: &JobLog,
 ) -> Result<Value> {
-    let mut clip = {
-        let (channel, id) = (channel.to_owned(), clip_id.to_owned());
-        app.db.call(move |c| queue::get(c, &channel, &id)).await?
-    };
+    let mut clip = queue::load(app, channel, clip_id).await?;
     if clip.status == "failed" || clip.youtube_id.is_some() {
         // A lost response can follow a successful upload.
         let videos = youtube::channel_videos(app, channel, true).await?;
@@ -379,7 +371,7 @@ pub async fn publish(
             set_thumbnail(app, &mut clip).await;
             clip.status = "uploaded".into();
             clip.uploaded_at = Some(now().to_string());
-            save(app, &clip).await?;
+            queue::store(app, &clip).await?;
             if upload_status == "processed" {
                 let _ = tokio::fs::remove_file(clip.video_path(app)).await;
             }
@@ -409,9 +401,9 @@ pub async fn publish(
             clip.youtube_id = Some(id);
             clip.status = "uploaded".into();
             clip.uploaded_at = Some(now().to_string());
-            save(app, &clip).await?;
+            queue::store(app, &clip).await?;
             set_thumbnail(app, &mut clip).await;
-            save(app, &clip).await?;
+            queue::store(app, &clip).await?;
             log.info(format!(
                 "Uploaded {}",
                 clip.youtube_url().unwrap_or_default()
@@ -421,7 +413,7 @@ pub async fn publish(
         }
         Err(error) => {
             clip.status = "failed".into();
-            save(app, &clip).await?;
+            queue::store(app, &clip).await?;
             Err(error)
         }
     }
@@ -440,15 +432,16 @@ pub async fn retry_thumbnails(app: &App, channel: &str) -> Result<Value> {
         })
         .await?;
     let mut done = 0;
-    for mut clip in pending.clone() {
+    let total = pending.len();
+    for mut clip in pending {
         let ok = set_thumbnail(app, &mut clip).await;
-        save(app, &clip).await?;
+        queue::store(app, &clip).await?;
         if !ok {
             break;
         }
         done += 1;
     }
-    Ok(format!("Set {done} of {} pending thumbnails.", pending.len()).into())
+    Ok(format!("Set {done} of {total} pending thumbnails.").into())
 }
 
 /// Refresh local upload state from YouTube, and reclaim each MP4 once its
@@ -470,7 +463,7 @@ pub async fn reconcile(app: &App, channel: &str, videos: &[youtube::Video]) -> R
         if clip.publish_at != publish || clip.processing_status != processing {
             clip.publish_at = publish;
             clip.processing_status = processing;
-            save(app, &clip).await?;
+            queue::store(app, &clip).await?;
         }
         if video.upload_status.as_deref() == Some("processed") && video.duration_seconds > 0 {
             let _ = tokio::fs::remove_file(clip.video_path(app)).await;

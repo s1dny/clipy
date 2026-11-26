@@ -33,12 +33,24 @@ fn reply(result: Result<Value>) -> CallToolResult {
 }
 
 fn picture(result: Result<Vec<u8>>) -> CallToolResult {
+    noted_picture(result.map(|jpeg| (None, jpeg)))
+}
+
+/// A JPEG for the agent to look at, after an optional JSON note.
+fn noted_picture(result: Result<(Option<Value>, Vec<u8>)>) -> CallToolResult {
     match result {
-        Ok(jpeg) => CallToolResult::success(vec![ContentBlock::image(
-            base64::engine::general_purpose::STANDARD.encode(jpeg),
-            "image/jpeg",
-        )]),
-        Err(error) => CallToolResult::error(vec![ContentBlock::text(format!("{error:#}"))]),
+        Ok((note, jpeg)) => {
+            let mut content: Vec<ContentBlock> = note
+                .map(|note| ContentBlock::text(note.to_string()))
+                .into_iter()
+                .collect();
+            content.push(ContentBlock::image(
+                base64::engine::general_purpose::STANDARD.encode(jpeg),
+                "image/jpeg",
+            ));
+            CallToolResult::success(content)
+        }
+        Err(error) => reply(Err(error)),
     }
 }
 
@@ -341,11 +353,20 @@ impl Channel {
     }
 
     async fn clip(&self, clip_id: &str) -> Result<queue::Clip> {
-        let (channel, id) = (self.name.clone(), clip_id.to_owned());
-        self.app
-            .db
-            .call(move |c| queue::get(c, &channel, &id))
-            .await
+        queue::load(&self.app, &self.name, clip_id).await
+    }
+
+    /// The channel's queued or running `kind` job for this source video.
+    async fn active_for_source(&self, kind: &str, source: &str) -> Result<Option<Value>> {
+        Ok(self
+            .jobs
+            .active(&self.name, kind)
+            .await?
+            .into_iter()
+            .find(|job| {
+                video_id(job["args"]["url"].as_str().unwrap_or_default())
+                    .is_ok_and(|id| id == source)
+            }))
     }
 
     async fn linked(&self, video: &str) -> Result<()> {
@@ -380,14 +401,12 @@ impl Channel {
         for selection in args.clips.iter().flatten() {
             selection.validate_release()?;
         }
-        for job in self.jobs.active(&self.name, "process_source").await? {
-            if video_id(job["args"]["url"].as_str().unwrap_or_default())
-                .ok()
-                .as_deref()
-                == Some(source.as_str())
-            {
-                bail!("This source is already rendering; follow its existing job.");
-            }
+        if self
+            .active_for_source("process_source", &source)
+            .await?
+            .is_some()
+        {
+            bail!("This source is already rendering; follow its existing job.");
         }
         let saved = crate::pipeline::saved_selections(&self.app, &self.name, &source).await?;
         let needs_artwork = match (&args.clips, &saved) {
@@ -445,9 +464,8 @@ impl Channel {
             .await?;
             clip.thumbnail_prompt = Some(prompt);
         }
-        let view = clip.view();
-        self.app.db.call(move |c| clip.save(c)).await?;
-        Ok(view)
+        queue::store(&self.app, &clip).await?;
+        Ok(clip.view())
     }
 
     async fn thumbnail(&self, args: ThumbnailArgs) -> Result<Vec<u8>> {
@@ -805,13 +823,11 @@ impl Channel {
     async fn prepare_source(&self, Parameters(args): Parameters<PrepareArgs>) -> CallToolResult {
         reply(async {
             let source = video_id(&args.url)?;
-            for job in self.jobs.active(&self.name, "prepare_source").await? {
-                if video_id(job["args"]["url"].as_str().unwrap_or_default()).ok().as_deref() == Some(source.as_str()) {
-                    if args.include_video && job["args"]["include_video"] != true {
-                        bail!("Transcript preparation is active; let it finish, then prepare with include_video=true.");
-                    }
-                    return Ok(job);
+            if let Some(job) = self.active_for_source("prepare_source", &source).await? {
+                if args.include_video && job["args"]["include_video"] != true {
+                    bail!("Transcript preparation is active; let it finish, then prepare with include_video=true.");
                 }
+                return Ok(job);
             }
             self.jobs
                 .submit(&self.name, "prepare_source", json!({"url": args.url, "include_video": args.include_video}))
@@ -1060,12 +1076,7 @@ impl Channel {
     async fn edit_video(&self, Parameters(args): Parameters<EditVideoArgs>) -> CallToolResult {
         reply(
             async {
-                let channel = self.name.clone();
-                let id = args.clip_id.clone();
-                self.app
-                    .db
-                    .call(move |c| queue::pending(c, &channel, &id))
-                    .await?;
+                queue::load_pending(&self.app, &self.name, &args.clip_id).await?;
                 if let Some(job) = self.jobs.active(&self.name, "edit_video").await?.first() {
                     bail!("An edit is already active: {}", job["id"]);
                 }
@@ -1102,18 +1113,12 @@ impl Channel {
     async fn discard_clip(&self, Parameters(args): Parameters<DiscardArgs>) -> CallToolResult {
         reply(
             async {
-                let channel = self.name.clone();
-                let mut clip = self
-                    .app
-                    .db
-                    .call(move |c| queue::pending(c, &channel, &args.clip_id))
-                    .await?;
+                let mut clip = queue::load_pending(&self.app, &self.name, &args.clip_id).await?;
                 clip.status = "discarded".into();
                 clip.discard_reason = Some(args.reason);
                 let _ = std::fs::remove_file(clip.video_path(&self.app));
-                let view = clip.view();
-                self.app.db.call(move |c| clip.save(c)).await?;
-                Ok(view)
+                queue::store(&self.app, &clip).await?;
+                Ok(clip.view())
             }
             .await,
         )
@@ -1195,36 +1200,28 @@ impl Channel {
         open_world_hint = true
     ))]
     async fn draw_thumbnail(&self, Parameters(args): Parameters<DrawArgs>) -> CallToolResult {
-        let drawn = async {
-            let speaker = args
-                .speaker
-                .or(self.app.channel_config(&self.name)?.speaker);
-            let path = self
-                .app
-                .channel_dir(&self.name)
-                .join("artwork")
-                .join(format!("{}.jpg", uuid::Uuid::new_v4().simple()));
-            crate::thumbnails::draw(
-                &self.app,
-                &self.name,
-                &args.thumbnail_prompt,
-                speaker.as_deref(),
-                &path,
-            )
-            .await?;
-            Ok::<_, anyhow::Error>((std::fs::read(&path)?, path))
-        }
-        .await;
-        match drawn {
-            Ok((jpeg, path)) => CallToolResult::success(vec![
-                ContentBlock::text(json!({"path": path}).to_string()),
-                ContentBlock::image(
-                    base64::engine::general_purpose::STANDARD.encode(jpeg),
-                    "image/jpeg",
-                ),
-            ]),
-            Err(error) => reply(Err(error)),
-        }
+        noted_picture(
+            async {
+                let speaker = args
+                    .speaker
+                    .or(self.app.channel_config(&self.name)?.speaker);
+                let path = self
+                    .app
+                    .channel_dir(&self.name)
+                    .join("artwork")
+                    .join(format!("{}.jpg", uuid::Uuid::new_v4().simple()));
+                crate::thumbnails::draw(
+                    &self.app,
+                    &self.name,
+                    &args.thumbnail_prompt,
+                    speaker.as_deref(),
+                    &path,
+                )
+                .await?;
+                Ok((Some(json!({"path": path})), std::fs::read(&path)?))
+            }
+            .await,
+        )
     }
 
     /// A speaker's headshot, shared by every channel whose thumbnails show the
@@ -1241,30 +1238,22 @@ impl Channel {
         open_world_hint = true
     ))]
     async fn headshot(&self, Parameters(args): Parameters<HeadshotArgs>) -> CallToolResult {
-        let saved = match &args.image_url {
-            Some(url) => {
-                match crate::thumbnails::save_headshot(&self.app, &args.speaker, url, args.crop)
-                    .await
-                {
-                    Ok(info) => Some(info),
-                    Err(error) => return reply(Err(error)),
-                }
+        noted_picture(
+            async {
+                let saved = match &args.image_url {
+                    Some(url) => Some(
+                        crate::thumbnails::save_headshot(&self.app, &args.speaker, url, args.crop)
+                            .await?,
+                    ),
+                    None => None,
+                };
+                Ok((
+                    saved,
+                    crate::thumbnails::panel_jpeg(&self.app, &args.speaker).await?,
+                ))
             }
-            None => None,
-        };
-        match crate::thumbnails::panel_jpeg(&self.app, &args.speaker).await {
-            Ok(jpeg) => {
-                let mut content = vec![ContentBlock::image(
-                    base64::engine::general_purpose::STANDARD.encode(jpeg),
-                    "image/jpeg",
-                )];
-                if let Some(info) = saved {
-                    content.insert(0, ContentBlock::text(info.to_string()));
-                }
-                CallToolResult::success(content)
-            }
-            Err(error) => reply(Err(error)),
-        }
+            .await,
+        )
     }
 
     /// Current guidance: editorial_guidance (guidance YOU apply when reading

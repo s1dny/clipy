@@ -98,11 +98,6 @@ fn private_status(original: &Value, publish_at: Option<&str>) -> Value {
     status
 }
 
-async fn save(app: &App, clip: &Clip) -> Result<()> {
-    let clip = clip.clone();
-    app.db.call(move |c| clip.save(c)).await
-}
-
 /// Rebuild the clip from a fresh download with a full re-encode, which drops
 /// the original MP4's stream and timestamp faults.
 async fn rebuild(app: &App, clip: &mut Clip, log: &JobLog) -> Result<()> {
@@ -175,7 +170,7 @@ pub async fn repair(
             "snippet": original["snippet"],
             "original_status": original["status"],
         }));
-        save(app, &clip).await?;
+        queue::store(app, &clip).await?;
     }
     let mut state = clip.repair.clone().unwrap_or_default();
     let original_id = state["original_id"].as_str().unwrap_or_default().to_owned();
@@ -192,14 +187,14 @@ pub async fn repair(
             }
             state["replacement_id"] = matches[0].id.clone().into();
             clip.repair = Some(state.clone());
-            save(app, &clip).await?;
+            queue::store(app, &clip).await?;
         } else {
             rebuild(app, &mut clip, log).await?;
             let marker = format!("clipy-repair-{original_id}");
             state["marker"] = marker.clone().into();
             state["upload_started"] = true.into();
             clip.repair = Some(state.clone());
-            save(app, &clip).await?;
+            queue::store(app, &clip).await?;
             let snippet = &state["snippet"];
             let mut tags: Vec<String> =
                 serde_json::from_value(snippet["tags"].clone()).unwrap_or_default();
@@ -223,12 +218,12 @@ pub async fn repair(
             state["replacement_id"] = id.clone().into();
             clip.repair = Some(state.clone());
             clip.thumbnail_pending = true;
-            save(app, &clip).await?;
+            queue::store(app, &clip).await?;
             let mut uploaded = clip.clone();
             uploaded.youtube_id = Some(id);
             crate::publish::set_thumbnail(app, &mut uploaded).await;
             clip.thumbnail_pending = uploaded.thumbnail_pending;
-            save(app, &clip).await?;
+            queue::store(app, &clip).await?;
         }
     }
     let replacement_id = state["replacement_id"]
@@ -316,7 +311,7 @@ pub async fn repair(
         clip.processing_status = Some("succeeded".into());
         state["activated"] = true.into();
         clip.repair = Some(state.clone());
-        save(app, &clip).await?;
+        queue::store(app, &clip).await?;
     }
     let old = youtube::videos(app, channel, std::slice::from_ref(&original_id), PARTS).await?;
     if let Some(old) = old.first() {
@@ -336,7 +331,7 @@ pub async fn repair(
     }
     state["completed_at"] = now().to_string().into();
     clip.repair = Some(state);
-    save(app, &clip).await?;
+    queue::store(app, &clip).await?;
     let _ = tokio::fs::remove_file(clip.video_path(app)).await;
     log.info(format!("Replaced {original_id} with {replacement_id}"));
     Ok(clip.youtube_url().into())
