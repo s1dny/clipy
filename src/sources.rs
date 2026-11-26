@@ -354,8 +354,6 @@ pub async fn sample(app: &App, url: &str, start_seconds: f64, end_seconds: f64) 
             "bestaudio/best",
             "--download-sections",
             &format!("*{start_seconds}-{end_seconds}"),
-            "--ffmpeg-location",
-            &config.ffmpeg,
             "-o",
             &template.to_string_lossy(),
             "--print",
