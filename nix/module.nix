@@ -1,7 +1,8 @@
 # clipy as systemd units, all as the clipy user with its state in /var/lib/clipy:
 #
 # - clipy: the server (`clipy serve`), with the channels' MCP endpoints.
-# - clipy-site: the public site, from the package's own files.
+# - clipy-site: a static site, such as the homepage and privacy policy Google's OAuth
+#   review asks for, when siteDir is set.
 # - clipy-studio: the collector, which reads YouTube Studio through a signed-in browser's
 #   DevTools port (studioCdp).
 # - clipy-agent: the daily Claude sessions for the channels, then the report, on a timer.
@@ -71,6 +72,11 @@ in
       type = lib.types.port;
       default = 3080;
     };
+    siteDir = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      description = "A directory of static files to serve; without it the site does not run.";
+    };
     sitePort = lib.mkOption {
       type = lib.types.port;
       default = 3081;
@@ -122,8 +128,10 @@ in
         HOST = "127.0.0.1";
         PORT = toString cfg.port;
       } "4G";
+    }
+    // lib.optionalAttrs (cfg.siteDir != null) {
       clipy-site =
-        daemon "clipy's site" "site --dir ${share}/site --port ${toString cfg.sitePort}" { }
+        daemon "clipy's site" "site --dir ${cfg.siteDir} --port ${toString cfg.sitePort}" { }
           "128M";
     }
     // lib.optionalAttrs (cfg.studioCdp != null) {

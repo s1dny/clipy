@@ -35,10 +35,11 @@ description_template = "{clip_description}\n\nOriginal: {original_url}"
 editorial_guidance = "Clips of {speaker}."
 illustration_prompt_template = "Draw {prompt} on white."
 
-[channels.blow]
-handle = "@JonathanBlowClips"
-speaker = "Jonathan Blow"
-thumbnail_template = "blow.jpg"
+[channels.talks]
+handle = "@TalksClips"
+speaker = "Example Speaker"
+thumbnail_template = "template.jpg"
+policy = "Goal: watch hours. Speaker: always Example Speaker."
 
 [channels.science]
 handle = "@ScienceClipsDaily"
@@ -351,6 +352,12 @@ impl Root {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("config.toml"), config).unwrap();
         std::fs::create_dir_all(dir.path().join("bin")).unwrap();
+        std::fs::create_dir_all(dir.path().join("thumbnails")).unwrap();
+        std::fs::copy(
+            Path::new(ROOT).join("tests/fixtures/template.jpg"),
+            dir.path().join("thumbnails/template.jpg"),
+        )
+        .unwrap();
         Self { dir }
     }
 
@@ -805,7 +812,7 @@ impl YouTube {
         Some(match (req.method.as_str(), path) {
             ("GET", "/youtube/v3/channels") => Resp::json(json!({"items": [{
                 "id": "channel-owned",
-                "snippet": {"title": "Test Channel", "customUrl": "@jonathanblowclips"},
+                "snippet": {"title": "Test Channel", "customUrl": "@talksclips"},
                 "status": {"isChannelMonetizationEnabled": state.monetized},
                 "statistics": {"subscriberCount": state.subscribers.to_string()},
                 "contentDetails": {"relatedPlaylists": {"uploads": "uploads"}},
@@ -934,7 +941,7 @@ pub fn clip_row(
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("video.mp4"), b"").unwrap();
     std::fs::copy(
-        Path::new(ROOT).join("thumbnails/blow.jpg"),
+        Path::new(ROOT).join("tests/fixtures/template.jpg"),
         dir.join("thumbnail.jpg"),
     )
     .unwrap();

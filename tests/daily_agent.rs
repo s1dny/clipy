@@ -1,5 +1,6 @@
 //! The daily runner drives Claude Code per channel, retries only a usage
-//! limit hit before any tool ran, and sends one report over Matrix.
+//! limit hit before any tool ran, gives each channel its policy from
+//! config.toml, and sends one report over Matrix.
 
 mod support;
 
@@ -10,7 +11,7 @@ use support::*;
 
 /// Claude Code's stream-json output, scripted by FAKE_MODE and attempt.
 const FAKE_CLAUDE: &str = r#"#!/bin/sh
-cat > /dev/null
+cat > prompt
 n=$(( $(cat attempts 2>/dev/null || echo 0) + 1 ))
 echo "$n" > attempts
 emit() { printf '%s\n' "$1"; }
@@ -62,7 +63,7 @@ fn daily_run(mode: &str, attempts: &str, succeeds: bool) {
     let root = Root::new(CONFIG);
     root.tool("claude", FAKE_CLAUDE);
     let work = root.path().join("work");
-    let output = command(&root, None, &["agent", "blow"])
+    let output = command(&root, None, &["agent", "talks"])
         .env("CLAUDE_CODE_OAUTH_TOKEN", "fixture")
         .env("CLIPY_SERVER", providers.url())
         .env("CLIPY_AGENT_WORK_DIR", &work)
@@ -80,11 +81,16 @@ fn daily_run(mode: &str, attempts: &str, succeeds: bool) {
     );
     assert_eq!(output.status.success(), succeeds, "{log}");
     assert_eq!(
-        std::fs::read_to_string(work.join("blow/attempts"))
+        std::fs::read_to_string(work.join("talks/attempts"))
             .unwrap()
             .trim(),
         attempts,
         "{log}"
+    );
+    let prompt = std::fs::read_to_string(work.join("talks/prompt")).unwrap();
+    assert!(
+        prompt.contains("Channel:\nGoal: watch hours. Speaker: always Example Speaker."),
+        "{prompt}"
     );
     let messages = messages.lock().unwrap();
     assert_eq!(messages.len(), 1, "{log}");
@@ -102,7 +108,7 @@ fn daily_run(mode: &str, attempts: &str, succeeds: bool) {
     );
     if succeeds {
         assert!(
-            body.contains("blow: Run: ")
+            body.contains("talks: Run: ")
                 && body.contains("200 input tokens · 10 output tokens · 1 tool call"),
             "{body}"
         );

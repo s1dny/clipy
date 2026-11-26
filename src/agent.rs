@@ -19,6 +19,7 @@ struct Settings {
     token: String,
     work: PathBuf,
     prompts: PathBuf,
+    config: crate::config::Config,
     model: String,
     effort: Option<String>,
     retry: Duration,
@@ -34,11 +35,14 @@ impl Settings {
             );
         }
         Ok(Self {
-            server: env("CLIPY_SERVER").unwrap_or_else(|| "http://clipy.clipy.svc:8000".into()),
+            server: env("CLIPY_SERVER").unwrap_or_else(|| "http://127.0.0.1:8000".into()),
             token: env("CLIPY_MCP_TOKEN").context("CLIPY_MCP_TOKEN is not set")?,
             work: env("CLIPY_AGENT_WORK_DIR")
                 .map_or_else(|| PathBuf::from("/tmp/agent"), PathBuf::from),
             prompts: home.join("agent"),
+            config: crate::config::Config::load(
+                &env("CLIPY_CONFIG").map_or_else(|| home.join("config.toml"), PathBuf::from),
+            )?,
             model: env("CLAUDE_MODEL").unwrap_or_else(|| "opus".into()),
             effort: env("CLAUDE_EFFORT"),
             retry: Duration::from_secs(
@@ -281,12 +285,10 @@ fn content_text(content: &Value) -> String {
 
 async fn run_channel(settings: &Settings, channel: &str) -> Result<Run> {
     let mut prompt = std::fs::read_to_string(settings.prompts.join("prompt.md"))?;
-    prompt += &std::fs::read_to_string(
-        settings
-            .prompts
-            .join("channels")
-            .join(format!("{channel}.md")),
-    )?;
+    prompt += &settings
+        .config
+        .channel(channel, &Default::default())?
+        .policy;
     if let Some(note) = &settings.note {
         prompt += &format!(
             "\nOne-off instruction from the owner for this run (it overrides the rules above where they conflict):\n{note}\n"

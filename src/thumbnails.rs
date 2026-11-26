@@ -148,7 +148,7 @@ fn open_oriented(path: &Path) -> Result<DynamicImage> {
 /// The thumbnail before its illustration.
 fn left(app: &App, config: &ChannelConfig, speaker: Option<&str>) -> Result<RgbImage> {
     if let Some(template) = &config.thumbnail_template {
-        let path = app.home.join("thumbnails").join(template);
+        let path = app.data.join("thumbnails").join(template);
         let image = image::open(&path).with_context(|| format!("open {}", path.display()))?;
         return Ok(image
             .resize_exact(SIZE.0, SIZE.1, FilterType::Lanczos3)

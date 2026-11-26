@@ -35,6 +35,7 @@ pub struct ChannelTable {
     speaker: Option<String>,
     thumbnail_template: Option<String>,
     category_id: Option<String>,
+    policy: Option<String>,
     editorial_guidance: Option<String>,
     illustration_prompt_template: Option<String>,
     description_template: Option<String>,
@@ -55,14 +56,16 @@ struct File {
 
 #[derive(Debug, Clone)]
 pub struct ChannelConfig {
-    /// The YouTube channel ("@JonathanBlowClips") its token must belong to.
+    /// The YouTube handle ("@ExampleClips") its token must belong to.
     pub handle: String,
     /// Every source's main speaker, for a channel about one person.
     pub speaker: Option<String>,
-    /// A fixed thumbnail in thumbnails/; without one, thumbnails put the
-    /// speaker's headshot on the left.
+    /// A fixed thumbnail in <data dir>/thumbnails/; without one, thumbnails
+    /// put the speaker's headshot on the left.
     pub thumbnail_template: Option<String>,
     pub category_id: String,
+    /// The channel's part of the agent's instructions, after agent/prompt.md.
+    pub policy: String,
     pub editorial_guidance: String,
     pub illustration_prompt_template: String,
     pub description_template: String,
@@ -105,6 +108,7 @@ impl Config {
                 speaker: table.speaker.or(d.speaker.clone()),
                 thumbnail_template: table.thumbnail_template.or(d.thumbnail_template.clone()),
                 category_id: table.category_id.or(d.category_id.clone()),
+                policy: table.policy.or(d.policy.clone()),
                 editorial_guidance: table.editorial_guidance.or(d.editorial_guidance.clone()),
                 illustration_prompt_template: table
                     .illustration_prompt_template
@@ -164,6 +168,7 @@ impl Config {
             speaker: table.speaker.clone(),
             thumbnail_template: table.thumbnail_template.clone(),
             category_id: table.category_id.clone().unwrap_or_else(|| "22".into()),
+            policy: table.policy.clone().unwrap_or_default(),
             editorial_guidance: prompt("editorial_guidance", &table.editorial_guidance)?,
             illustration_prompt_template: prompt(
                 "illustration_prompt_template",

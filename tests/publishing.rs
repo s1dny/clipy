@@ -65,7 +65,7 @@ fn setup(status: &str) -> Setup {
     };
     let providers = providers(&runtime, handler);
     let root = Root::new(CONFIG);
-    root.token("blow");
+    root.token("talks");
     let raw = root.path().join("raw.mkv");
     ffmpeg(&[
         "-f",
@@ -90,16 +90,16 @@ fn setup(status: &str) -> Setup {
     ]);
     let mut clip = clip_row(
         &root,
-        "blow",
+        "talks",
         "aaaaaaaaaaa",
         1,
         status,
-        Some("Jonathan Blow"),
+        Some("Example Speaker"),
     );
     let selection: clipy::clips::ClipSelection = serde_json::from_value(plan()).unwrap();
     let output = root
         .path()
-        .join("channels/blow/clips/aaaaaaaaaaa-01/video.mp4");
+        .join("channels/talks/clips/aaaaaaaaaaa-01/video.mp4");
     let http = clipy::app::http_client(std::time::Duration::from_secs(30)).unwrap();
     let report = runtime
         .block_on(clipy::render::render(
@@ -126,7 +126,7 @@ fn setup(status: &str) -> Setup {
     root.db()
         .with(move |c| {
             c.execute(
-                "INSERT INTO selections VALUES ('blow', 'aaaaaaaaaaa', 'Jonathan Blow', ?1, '2026-10-30T00:00:00Z')",
+                "INSERT INTO selections VALUES ('talks', 'aaaaaaaaaaa', 'Example Speaker', ?1, '2026-10-30T00:00:00Z')",
                 [plans],
             )?;
             Ok(())
@@ -145,7 +145,7 @@ fn setup(status: &str) -> Setup {
 
 fn row(root: &Root) -> clipy::queue::Clip {
     root.db()
-        .with(|c| clipy::queue::get(c, "blow", "aaaaaaaaaaa:01"))
+        .with(|c| clipy::queue::get(c, "talks", "aaaaaaaaaaa:01"))
         .unwrap()
 }
 
@@ -158,18 +158,18 @@ fn scheduled_upload_survives_reset_and_lost_confirmation() {
     let media = setup
         .root
         .path()
-        .join("channels/blow/clips/aaaaaaaaaaa-01/video.mp4");
+        .join("channels/talks/clips/aaaaaaaaaaa-01/video.mp4");
     setup.runtime.block_on(async {
         let job = data(
             &call(
                 base,
-                "blow",
+                "talks",
                 "publish_clip",
                 json!({"clip_id": "aaaaaaaaaaa:01", "publish_at": setup.publish_at}),
             )
             .await,
         );
-        let job = wait_job(base, "blow", &job).await;
+        let job = wait_job(base, "talks", &job).await;
         assert_eq!(job["status"], "succeeded", "{job}\n{}", server.log());
         {
             let youtube = setup.youtube.lock().unwrap();
@@ -197,13 +197,13 @@ fn scheduled_upload_survives_reset_and_lost_confirmation() {
         let job = data(
             &call(
                 base,
-                "blow",
+                "talks",
                 "publish_clip",
                 json!({"clip_id": "aaaaaaaaaaa:01"}),
             )
             .await,
         );
-        assert_eq!(wait_job(base, "blow", &job).await["status"], "succeeded");
+        assert_eq!(wait_job(base, "talks", &job).await["status"], "succeeded");
         let youtube = setup.youtube.lock().unwrap();
         assert_eq!((youtube.sessions, youtube.videos.len()), (1, 1));
         assert_eq!(row(&setup.root).youtube_id.as_deref(), Some("new-upload"));
@@ -230,13 +230,13 @@ fn publishing_refuses_a_pending_clip_below_the_video_format() {
         let job = data(
             &call(
                 base,
-                "blow",
+                "talks",
                 "publish_clip",
                 json!({"clip_id": "aaaaaaaaaaa:01", "publish_at": setup.publish_at}),
             )
             .await,
         );
-        let job = wait_job(base, "blow", &job).await;
+        let job = wait_job(base, "talks", &job).await;
         assert_eq!(job["status"], "failed", "{job}");
         assert!(job.to_string().contains("edit_video"), "{job}");
         assert_eq!(setup.youtube.lock().unwrap().sessions, 0);
@@ -265,7 +265,7 @@ fn repair_preserves_release_and_never_replaces_public_video() {
     let media = setup
         .root
         .path()
-        .join("channels/blow/clips/aaaaaaaaaaa-01/video.mp4");
+        .join("channels/talks/clips/aaaaaaaaaaa-01/video.mp4");
     let server = Server::start(
         &setup.root,
         Some(&setup.providers),
@@ -276,13 +276,13 @@ fn repair_preserves_release_and_never_replaces_public_video() {
         let refused = data(
             &call(
                 base,
-                "blow",
+                "talks",
                 "repair_upload",
                 json!({"video_id": "broken-upload"}),
             )
             .await,
         );
-        assert_eq!(wait_job(base, "blow", &refused).await["status"], "failed");
+        assert_eq!(wait_job(base, "talks", &refused).await["status"], "failed");
         {
             let mut youtube = setup.youtube.lock().unwrap();
             assert_eq!(youtube.sessions, 0);
@@ -293,13 +293,13 @@ fn repair_preserves_release_and_never_replaces_public_video() {
         let job = data(
             &call(
                 base,
-                "blow",
+                "talks",
                 "repair_upload",
                 json!({"video_id": "broken-upload"}),
             )
             .await,
         );
-        let job = wait_job(base, "blow", &job).await;
+        let job = wait_job(base, "talks", &job).await;
         assert_eq!(job["status"], "succeeded", "{job}\n{}", server.log());
         {
             let youtube = setup.youtube.lock().unwrap();
@@ -320,14 +320,14 @@ fn repair_preserves_release_and_never_replaces_public_video() {
         let resumed = data(
             &call(
                 base,
-                "blow",
+                "talks",
                 "repair_upload",
                 json!({"video_id": "broken-upload"}),
             )
             .await,
         );
         assert_eq!(
-            wait_job(base, "blow", &resumed).await["status"],
+            wait_job(base, "talks", &resumed).await["status"],
             "succeeded"
         );
         assert_eq!(setup.youtube.lock().unwrap().sessions, 1);

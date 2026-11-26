@@ -48,7 +48,7 @@ enum Command {
     },
     /// Serve the public site.
     Site {
-        #[arg(long, default_value = "site")]
+        #[arg(long)]
         dir: PathBuf,
         #[arg(long, default_value_t = 8080)]
         port: u16,

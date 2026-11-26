@@ -1,105 +1,112 @@
 # Clipy
 
-Clipy runs YouTube channels that post clips from long talks, podcasts and
-streams. A Claude Code agent chooses the sources and excerpts and writes the
-titles and descriptions. Clipy downloads, transcribes, renders and uploads.
+Clipy turns long videos into a YouTube clip channel. You give it a channel
+and a speaker. Once a day, a Claude Code agent finds that person's talks,
+podcasts and streams, picks excerpts that stand on their own, and schedules
+them as uploads of 8 to 20 minutes.
 
-| Channel | Speaker | Status |
-|---|---|---|
-| [Jonathan Blow Clips](https://www.youtube.com/@JonathanBlowClips) | Jonathan Blow | Running, monetized |
-| [George Hotz Clips](https://www.youtube.com/@georgehotzclips) | George Hotz | Running |
-| [DHH Clips](https://www.youtube.com/@DHHClipsDaily) | David Heinemeier Hansson | Paused |
-| [Tsoding Clips](https://www.youtube.com/@TsodingClips) | Tsoding | Paused |
+The agent makes the editorial calls: which sources to use, where to cut, and
+what the titles, descriptions and thumbnails say. Clipy downloads, transcribes,
+renders, uploads and keeps the records.
 
 ## How it works
 
-`clipy serve` is an MCP server. Each channel has its own endpoint,
-`/mcp/<channel>`, with tools to search YouTube, read transcripts, render and
-upload clips, and call the Google APIs. Downloads, renders and uploads run as
-background jobs that survive restarts.
+Clipy is one Rust binary that runs as three services.
 
-`clipy agent` runs every day at 04:00 Sydney time. For each channel it starts
-`claude -p` with [`agent/prompt.md`](agent/prompt.md) and the channel's policy
-from [`agent/channels/`](agent/channels), connected to that channel's
-endpoint. The agent keeps a notebook in the database between runs. When all
-channels are done, [`agent/observer.md`](agent/observer.md) writes a report
-that goes to Matrix.
+`clipy serve` is an MCP server with one endpoint per channel,
+`/mcp/<channel>`. Its tools search YouTube, read transcripts, render and upload
+clips, and call the Google APIs. Downloads, renders and uploads run as
+background jobs that survive a restart.
 
-`clipy studio` reads YouTube Studio analytics through a signed-in Chromium,
-and sends the Studio requests the public API can't, such as turning on ads.
+`clipy agent` runs `claude -p` once for each channel, connected to that
+channel's endpoint. The instructions are [`agent/prompt.md`](agent/prompt.md)
+followed by the channel's `policy` from `config.toml`. The agent keeps notes
+from one run to the next. When every channel has finished, a second agent
+sends a short report to Matrix.
 
-Every write to Google or Studio is logged before it's sent, and none are
-retried automatically.
+`clipy studio` uses a signed-in Chromium to read YouTube Studio analytics.
+It also sends the requests the public API doesn't offer, such as turning on
+ads.
 
-## Building
+## Installation
 
-```
-cargo build --release
-```
-
-Clipy needs ffmpeg and yt-dlp at runtime. `nix build` builds the package
-production runs.
-
-## Usage
+Clipy needs Rust, ffmpeg, yt-dlp and [Claude Code](https://claude.com/claude-code).
 
 ```
-clipy serve                      run the MCP server and jobs
-clipy agent <channel>...         run the daily agents and send the report
-clipy studio                     run the Studio worker
-clipy collect [channel]          read Studio analytics once
-clipy auth <channel>             sign a channel in to YouTube
-clipy prepare <url>              download and transcribe a video
-clipy transcript <url>           print a page of a transcript
-clipy process <channel> <url>    render clips from a JSON selections file
-clipy site                       serve the public site
+cargo install --path .
 ```
 
-To sign in a channel, enable the YouTube Data, Analytics and Reporting APIs
-in a Google Cloud project, save a Desktop OAuth client as
-`client_secrets.json`, and set the app to "In production" so the token
-doesn't expire after a week. Then run `clipy auth <channel>` and choose the
-channel's brand account.
+Nix users can run `nix build` instead. The flake also provides a NixOS
+module.
+
+## Getting started
+
+1. Copy `config.toml.example` to `config.toml` and add a `[channels.<name>]`
+   table for your channel.
+2. Copy `.env.example` to `.env` and fill in the keys.
+3. In Google Cloud, enable the YouTube Data, Analytics and Reporting APIs.
+   Create a Desktop OAuth client, save it as `client_secrets.json`, and set
+   the app to "In production" so tokens don't expire after a week.
+4. Sign the channel in with `clipy auth <name>`.
+5. Start the server with `clipy serve`, then run the agent with
+   `clipy agent <name>`.
+
+To clip one video by hand:
+
+```
+clipy prepare <url>                                 # download and transcribe
+clipy transcript <url>                              # read the transcript
+clipy process <name> <url> --clips selections.json  # render the clips
+```
 
 ## Configuration
 
-Copy `config.toml.example` to `config.toml` and `.env.example` to `.env`.
-`config.toml` holds the channels and models; `[channels.<name>]` overrides
-`[defaults]`.
+`config.toml` defines the models and the channels. Each `[channels.<name>]`
+table sets the channel's handle, speaker, YouTube category, thumbnail
+template, prompts and `policy`. It inherits anything it leaves out from
+`[defaults]`. Thumbnail templates and speaker headshots are kept in the data
+directory.
 
 | Variable | |
 |---|---|
-| `CLIPY_DATA_DIR` | Database, clips and sources |
+| `CLIPY_DATA_DIR` | Database, media and credentials (default `.`) |
 | `CLIPY_CONFIG` | Path to `config.toml` |
 | `CLIPY_MCP_TOKEN` | Server bearer token, at least 32 characters |
 | `ASSEMBLYAI_API_KEY` | Transcription |
 | `OPENROUTER_API_KEY` | Thumbnail illustrations |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Agent login, from `claude setup-token` |
-| `CLAUDE_MODEL`, `CLAUDE_EFFORT` | Agent model (default `opus`) and effort |
-| `CLIPY_SERVER` | Server URL for the agent |
-| `CLIPY_AGENT_NOTE` | Extra instruction for every channel's next run |
+| `CLAUDE_MODEL` | Agent model (default `opus`) |
+| `CLIPY_SERVER` | Server URL for the agent (default `http://127.0.0.1:8000`) |
 | `CLIPY_STUDIO_CDP` | Chromium DevTools URL (default `http://127.0.0.1:9222`) |
-| `CLIPY_STUDIO_SESSION` | Saved Studio cookies |
-| `MATRIX_HOMESERVER`, `MATRIX_ROOM`, `MATRIX_ACCESS_TOKEN` | Where the report goes |
+| `MATRIX_HOMESERVER`, `MATRIX_ROOM`, `MATRIX_ACCESS_TOKEN` | Report destination |
 
-## Deployment
+## NixOS
 
-Production runs on azalab-0 with the NixOS module in
-[`nix/module.nix`](nix/module.nix). Settings and secrets are in the homelab
-repo under `modules/apps/clipy.nix`. Each push to `main` is built in CI, then
-the homelab updates its pin and azalab-0 switches to it.
+```nix
+{
+  imports = [ clipy.nixosModules.default ];
 
-To run the agents now:
+  services.clipy = {
+    enable = true;
+    configFile = ./clipy.toml;
+    environmentFiles = [ "/run/secrets/clipy.env" ];
+    agentChannels = [ "example" ];
+  };
+}
+```
+
+The module runs the server and the agent, which starts at 04:00 every day. It
+runs the Studio collector when `studioCdp` is set and a static site when
+`siteDir` is set. See [`nix/module.nix`](nix/module.nix) for every option.
+
+## Development
 
 ```
-ssh azalab-0 sudo systemctl start --no-block clipy-agent
-```
-
-## Tests
-
-```
+cargo fmt
+cargo clippy --all-targets
 cargo test --release
 ```
 
-The tests run the real binary with ffmpeg, SQLite and Chromium. Google,
+The tests run the real binary against ffmpeg, SQLite and Chromium. Google,
 Studio and OpenRouter are replaced by local servers behind a TLS proxy. Set
-`CLIPY_TEST_CHROME` to the Chromium path.
+`CLIPY_TEST_CHROME` if Chromium isn't found automatically.

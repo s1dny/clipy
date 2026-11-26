@@ -58,8 +58,8 @@
         curl
         jq
       ];
-      # The binary, run in the share directory that holds what it reads from its working
-      # directory: the thumbnail templates, the agent's prompts and the site.
+      # The binary, run in the share directory that holds the agent's prompts, which it
+      # reads from its working directory.
       clipy = craneLib.buildPackage (
         args
         // {
@@ -67,9 +67,7 @@
           nativeBuildInputs = args.nativeBuildInputs ++ [ pkgs.makeWrapper ];
           postInstall = ''
             mkdir -p $out/share/clipy
-            cp -R ${./thumbnails} $out/share/clipy/thumbnails
             cp -R ${./agent} $out/share/clipy/agent
-            cp -R ${./site} $out/share/clipy/site
             chmod -R u+w $out/share/clipy
             wrapProgram $out/bin/clipy --prefix PATH : ${lib.makeBinPath tools}
           '';

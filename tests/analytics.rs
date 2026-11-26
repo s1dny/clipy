@@ -213,7 +213,7 @@ fn google(req: &Req) -> Option<Resp> {
         "i.ytimg.com" if req.path == "/max.jpg" => Some(Resp::status(404, json!({}))),
         "i.ytimg.com" => Some(Resp::bytes(
             "image/jpeg",
-            std::fs::read(format!("{ROOT}/thumbnails/blow.jpg")).unwrap(),
+            std::fs::read(format!("{ROOT}/tests/fixtures/template.jpg")).unwrap(),
         )),
         _ => None,
     }
@@ -256,14 +256,14 @@ fn setup(monetized: bool) -> (tokio::runtime::Runtime, Providers, Root, Arc<Fixt
     };
     let providers = providers(&runtime, handler);
     let root = Root::new(CONFIG.split("[channels.science]").next().unwrap());
-    root.token("blow");
+    root.token("talks");
     // Yesterday's counters, as the hourly sampler would have recorded them.
     let observed = (now - jiff::SignedDuration::from_hours(24)).to_string();
     root.db()
         .with(move |c| {
-            c.execute("INSERT INTO counter_snapshots VALUES ('blow', ?1, 11100)", [&observed])?;
+            c.execute("INSERT INTO counter_snapshots VALUES ('talks', ?1, 11100)", [&observed])?;
             c.execute(
-                "INSERT INTO counter_videos VALUES ('blow', ?1, 'owned-video', 'Example', 'public', ?2, 100, 5, 1)",
+                "INSERT INTO counter_videos VALUES ('talks', ?1, 'owned-video', 'Example', 'public', ?2, 100, 5, 1)",
                 [&observed, &published],
             )?;
             Ok(())
@@ -273,7 +273,7 @@ fn setup(monetized: bool) -> (tokio::runtime::Runtime, Providers, Root, Arc<Fixt
 }
 
 fn collect(root: &Root, providers: &Providers, session: &std::path::Path) -> std::process::Output {
-    command(root, Some(providers), &["collect", "blow"])
+    command(root, Some(providers), &["collect", "talks"])
         .env("CLIPY_STUDIO_SESSION", session)
         // No browser is running; direct collection never needs one.
         .env(
@@ -312,13 +312,13 @@ fn collect_report_and_tune(monetized: bool) {
         let mut reports = Vec::new();
         for metrics in ["views,estimatedMinutesWatched", "estimatedRevenue"] {
             let args = json!({"api": "youtubeAnalytics", "version": "v2", "method": "reports.query", "parameters": analytics(metrics)});
-            reports.push(data(&call(&base, "blow", "google_api_read", args).await));
+            reports.push(data(&call(&base, "talks", "google_api_read", args).await));
         }
         assert!(reports[0]["rows"][0][0].as_str().unwrap() > reports[1]["rows"][0][0].as_str().unwrap());
-        let history = data(&call(&base, "blow", "read_observations", json!({})).await)["snapshots"].clone();
+        let history = data(&call(&base, "talks", "read_observations", json!({})).await)["snapshots"].clone();
         assert!(history[0]["videos"]["owned-video"]["views"].as_i64() > history[1]["videos"]["owned-video"]["views"].as_i64());
         // Private uploads often lack max-resolution artwork; another rendition still previews.
-        let preview = image(&call(&base, "blow", "view_thumbnail", json!({"video_id": "owned-video"})).await);
+        let preview = image(&call(&base, "talks", "view_thumbnail", json!({"video_id": "owned-video"})).await);
         assert_eq!((preview.width(), preview.height()), (1920, 1080));
     });
 
@@ -340,7 +340,7 @@ fn collect_report_and_tune(monetized: bool) {
         String::from_utf8_lossy(&output.stderr)
     );
     runtime.block_on(async {
-        let observations = data(&call(&base, "blow", "read_observations", json!({})).await);
+        let observations = data(&call(&base, "talks", "read_observations", json!({})).await);
         let channel = &observations["studio"]["channel"];
         assert_eq!(channel["currency"], "AUD");
         assert_eq!(channel["reporting_timezone"], "America/Los_Angeles");
@@ -352,7 +352,7 @@ fn collect_report_and_tune(monetized: bool) {
         let csv = text(
             &call(
                 &base,
-                "blow",
+                "talks",
                 "google_api_read",
                 json!({"api": "youtubereporting", "version": "v1", "method": "media.download",
                        "parameters": {"resourceName": "CHANNEL/channel-owned/jobs/reach/reports/report", "alt": "media"}}),
@@ -371,7 +371,7 @@ fn collect_report_and_tune(monetized: bool) {
     assert!(!header.contains("$2.47"));
     let snapshot = root
         .db()
-        .with(|c| Ok(clipy::observations::channel_reading(c, "blow")?.unwrap()))
+        .with(|c| Ok(clipy::observations::channel_reading(c, "talks")?.unwrap()))
         .unwrap();
     let daily = snapshot["daily"].as_object().unwrap();
     let latest = daily.keys().max().unwrap();
@@ -393,17 +393,17 @@ fn collect_report_and_tune(monetized: bool) {
     // A title experiment journals its intent, baseline and outcome.
     runtime.block_on(async {
         let read = json!({"api": "youtube", "version": "v3", "method": "videos.list", "parameters": {"part": "snippet", "id": "owned-video"}});
-        let current = data(&call(&base, "blow", "google_api_read", read.clone()).await)["items"][0].clone();
+        let current = data(&call(&base, "talks", "google_api_read", read.clone()).await)["items"][0].clone();
         let mut snippet = current["snippet"].clone();
         snippet["title"] = "A better title".into();
         let body = json!({"id": current["id"], "snippet": snippet});
-        let baseline = data(&call(&base, "blow", "read_observations", json!({})).await)["snapshots"][0].clone();
+        let baseline = data(&call(&base, "talks", "read_observations", json!({})).await)["snapshots"][0].clone();
         let mut write = read.clone();
         write["method"] = "videos.update".into();
         write["parameters"] = json!({"part": "snippet", "body": body});
         write["observation"] = json!({"before": current, "baseline": baseline});
-        let result = data(&call(&base, "blow", "google_api_write", write).await);
-        let verified = data(&call(&base, "blow", "google_api_read", read).await)["items"][0].clone();
+        let result = data(&call(&base, "talks", "google_api_write", write).await);
+        let verified = data(&call(&base, "talks", "google_api_read", read).await)["items"][0].clone();
         assert_eq!(verified["snippet"], body["snippet"]);
         let id = result["audit_id"].as_str().unwrap().to_owned();
         let journal = root
@@ -426,7 +426,7 @@ fn collect_report_and_tune(monetized: bool) {
     assert!(!collect(&root, &providers, &session).status.success());
     let unchanged = root
         .db()
-        .with(|c| Ok(clipy::observations::channel_reading(c, "blow")?.unwrap()))
+        .with(|c| Ok(clipy::observations::channel_reading(c, "talks")?.unwrap()))
         .unwrap();
     assert_eq!(unchanged, snapshot);
     root.db()
@@ -477,7 +477,7 @@ fn discovered_api_methods_preserve_raw_data_and_separate_writes() {
         let mut matches = Vec::new();
         let mut offset = Some(0);
         while let Some(at) = offset {
-            let page = data(&call(&base, "blow", "google_api_spec", json!({"query": "videos.update", "limit": 1, "offset": at})).await);
+            let page = data(&call(&base, "talks", "google_api_spec", json!({"query": "videos.update", "limit": 1, "offset": at})).await);
             matches.extend(page["matches"].as_array().unwrap().clone());
             offset = page["next_offset"].as_u64();
         }
@@ -490,26 +490,26 @@ fn discovered_api_methods_preserve_raw_data_and_separate_writes() {
             .unwrap()
             .0
             .to_owned();
-        let method = data(&call(&base, "blow", "google_api_spec", json!({"pointer": pointer, "query": null})).await)["value"].clone();
+        let method = data(&call(&base, "talks", "google_api_spec", json!({"pointer": pointer, "query": null})).await)["value"].clone();
         // The executable path comes from Google's spec, not a server-side catalog.
         let operation = method["id"].as_str().unwrap().split('.').skip(1).collect::<Vec<_>>().join(".");
         let read = json!({"api": "youtube", "version": "v3", "method": "videos.list", "parameters": {"part": "snippet", "id": "owned-video"}});
-        let before = data(&call(&base, "blow", "google_api_read", read.clone()).await)["items"].clone();
+        let before = data(&call(&base, "talks", "google_api_read", read.clone()).await)["items"].clone();
         let mut snippet = before[0]["snippet"].clone();
         snippet["title"] = "An experiment".into();
         let body = json!({"id": before[0]["id"], "snippet": snippet});
         let mut mutation = read.clone();
         mutation["method"] = operation.into();
         mutation["parameters"] = json!({"part": "snippet", "body": body});
-        assert!(is_error(&call(&base, "blow", "google_api_read", mutation.clone()).await));
-        assert!(is_error(&call(&base, "blow", "google_api_write", read.clone()).await));
-        assert_eq!(data(&call(&base, "blow", "google_api_read", read.clone()).await)["items"], before);
+        assert!(is_error(&call(&base, "talks", "google_api_read", mutation.clone()).await));
+        assert!(is_error(&call(&base, "talks", "google_api_write", read.clone()).await));
+        assert_eq!(data(&call(&base, "talks", "google_api_read", read.clone()).await)["items"], before);
         let mut unknown = read.clone();
         unknown["method"] = "videos.not_a_published_method".into();
-        assert!(is_error(&call(&base, "blow", "google_api_read", unknown).await));
+        assert!(is_error(&call(&base, "talks", "google_api_read", unknown).await));
         assert_eq!(journal(&root), 0);
-        let changed = data(&call(&base, "blow", "google_api_write", mutation).await);
-        assert_eq!(data(&call(&base, "blow", "google_api_read", read.clone()).await)["items"][0]["snippet"], body["snippet"]);
+        let changed = data(&call(&base, "talks", "google_api_write", mutation).await);
+        assert_eq!(data(&call(&base, "talks", "google_api_read", read.clone()).await)["items"][0]["snippet"], body["snippet"]);
         let id = changed["audit_id"].as_str().unwrap().to_owned();
         let response = root
             .db()
@@ -520,7 +520,7 @@ fn discovered_api_methods_preserve_raw_data_and_separate_writes() {
         let mut failing = read.clone();
         failing["method"] = "comments.insert".into();
         failing["parameters"] = json!({"part": "snippet", "body": {"snippet": {"textOriginal": "test"}}});
-        assert!(is_error(&call(&base, "blow", "google_api_write", failing).await));
+        assert!(is_error(&call(&base, "talks", "google_api_write", failing).await));
         let unconfirmed = root
             .db()
             .with(|c| Ok(c.query_row("SELECT count(*) FROM api_writes WHERE status = 'unconfirmed' AND error IS NOT NULL", [], |r| r.get::<_, i64>(0))?))
@@ -528,24 +528,24 @@ fn discovered_api_methods_preserve_raw_data_and_separate_writes() {
         assert_eq!(unconfirmed, 1);
         // Media uploads only from this channel's own files.
         let outside = root.path().join("outside.jpg");
-        std::fs::copy(format!("{ROOT}/thumbnails/blow.jpg"), &outside).unwrap();
+        std::fs::copy(format!("{ROOT}/tests/fixtures/template.jpg"), &outside).unwrap();
         let mut media = read.clone();
         media["method"] = "thumbnails.set".into();
         media["parameters"] = json!({"videoId": "owned-video"});
         media["media_path"] = json!(outside);
-        assert!(is_error(&call(&base, "blow", "google_api_write", media.clone()).await));
-        let token = root.path().join("channels/blow/youtube-token.json");
+        assert!(is_error(&call(&base, "talks", "google_api_write", media.clone()).await));
+        let token = root.path().join("channels/talks/youtube-token.json");
         media["media_path"] = json!(token);
-        assert!(is_error(&call(&base, "blow", "google_api_write", media.clone()).await));
+        assert!(is_error(&call(&base, "talks", "google_api_write", media.clone()).await));
         // Artwork drawn for a live video comes back as an image to inspect,
         // with the server path to upload.
-        let drawn = call(&base, "blow", "draw_thumbnail", json!({"thumbnail_prompt": "a chip in chains"})).await;
+        let drawn = call(&base, "talks", "draw_thumbnail", json!({"thumbnail_prompt": "a chip in chains"})).await;
         let artwork = image(&drawn);
         assert_eq!((artwork.width(), artwork.height()), (1920, 1080));
         let inside = std::path::PathBuf::from(data(&drawn)["path"].as_str().unwrap());
-        assert!(inside.starts_with(root.path().join("channels/blow/artwork")));
+        assert!(inside.starts_with(root.path().join("channels/talks/artwork")));
         media["media_path"] = json!(inside);
-        let uploaded = data(&call(&base, "blow", "google_api_write", media).await);
+        let uploaded = data(&call(&base, "talks", "google_api_write", media).await);
         let id = uploaded["audit_id"].as_str().unwrap().to_owned();
         let path = root
             .db()

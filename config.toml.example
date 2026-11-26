@@ -30,47 +30,25 @@ Use a pure WHITE background (#FFFFFF).
 """
 
 # A channel about one person: a fixed speaker and thumbnail template (in
-# ./thumbnails, a photo on the left and white on the right).
+# <data dir>/thumbnails, a photo on the left and white on the right).
 [channels.example]
 handle = "@ExampleClips"
 speaker = "Example Person"
 thumbnail_template = "example.jpg"
 category_id = "28"
 
+# The channel's part of the agent's instructions, appended to agent/prompt.md:
+# its goal, speaker, where to find sources and what the owner does by hand.
+policy = """
+Goal: watch hours and subscribers toward monetization.
+
+Speaker: always Example Person. Thumbnails use the fixed template.
+
+Sources: their own channel, talks, podcasts and interviews where they do most of the talking.
+"""
+
 # A channel of many speakers: thumbnails put each clip speaker's headshot
 # (<data dir>/headshots/<name>.jpg, which the agent makes) on the left.
 [channels.ideas]
 handle = "@IdeasClips"
 category_id = "27"
-
-[channels.hotz]
-handle = "@georgehotzclips"
-speaker = "George Hotz"
-thumbnail_template = "hotz.jpg"
-category_id = "28"
-
-description_template = """
-{clip_description}
-
-Clip from George Hotz
-Original: {original_url}
-Twitch: https://www.twitch.tv/georgehotz
-
-#georgehotz #programming #ai #tinygrad
-"""
-
-[channels.dhh]
-handle = "@DHHClipsDaily"
-speaker = "David Heinemeier Hansson"
-thumbnail_template = "dhh.jpg"
-category_id = "28"
-
-description_template = """
-{clip_description}
-
-Clip from David Heinemeier Hansson (DHH)
-Original: {original_url}
-DHH's writing: https://world.hey.com/dhh
-
-#dhh #rubyonrails #programming #37signals
-"""

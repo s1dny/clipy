@@ -122,7 +122,7 @@ fn resume_exports_synchronized_media(codec: &str, extension: &str) {
         &selections,
         json!([{
             "title": "Programming", "description": "A programming discussion.", "start_ms": 1300, "end_ms": 6300,
-            "chapters": [], "speaker": "Jonathan Blow", "thumbnail_prompt": "a binary",
+            "chapters": [], "speaker": "Example Speaker", "thumbnail_prompt": "a binary",
         }])
         .to_string(),
     )
@@ -130,7 +130,7 @@ fn resume_exports_synchronized_media(codec: &str, extension: &str) {
     for attempt in 0..2 {
         // A restarted run still downloads audio; its finished render and queue are reused.
         std::fs::copy(&audio, source.join("audio.webm")).unwrap();
-        let mut args = vec!["process", "blow", url];
+        let mut args = vec!["process", "talks", url];
         if attempt == 0 {
             args.extend(["--clips", selections.to_str().unwrap()]);
         }
@@ -141,10 +141,10 @@ fn resume_exports_synchronized_media(codec: &str, extension: &str) {
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    let clips = queue(&root, "blow");
+    let clips = queue(&root, "talks");
     assert_eq!(clips.len(), 1);
     assert_eq!(clips[0].status, "pending");
-    let app_dir = root.path().join("channels/blow/clips/aaaaaaaaaaa-01");
+    let app_dir = root.path().join("channels/talks/clips/aaaaaaaaaaa-01");
     let clip: PathBuf = app_dir.join("video.mp4");
     let thumbnail = image::open(app_dir.join("thumbnail.jpg")).unwrap();
     assert_eq!((thumbnail.width(), thumbnail.height()), (1920, 1080));
@@ -253,19 +253,19 @@ fn agent_reads_full_source_and_submits_renderable_selections() {
     let base = server.base.as_str();
     let source = root.path().join("sources/ccccccccccc");
     runtime.block_on(async {
-        let prepared = wait_job(base, "blow", &data(&call(base, "blow", "prepare_source", json!({"url": url})).await)).await;
+        let prepared = wait_job(base, "talks", &data(&call(base, "talks", "prepare_source", json!({"url": url})).await)).await;
         assert_eq!(prepared["status"], "succeeded", "{prepared}");
         let mut sentences = Vec::new();
         let mut offset = Some(0);
         while let Some(at) = offset {
-            let page = data(&call(base, "blow", "get_source_transcript", json!({"url": url, "offset": at, "limit": 1})).await);
+            let page = data(&call(base, "talks", "get_source_transcript", json!({"url": url, "offset": at, "limit": 1})).await);
             sentences.extend(page["sentences"].as_array().unwrap().clone());
             offset = page["next_offset"].as_u64();
         }
         assert_eq!(sentences, utterances);
-        assert!(is_error(&call(base, "blow", "process_source", json!({"url": url})).await));
-        assert!(is_error(&call(base, "blow", "get_source_transcript", json!({"url": "https://youtube.com/watch?v=../../x"})).await));
-        assert!(is_error(&call(base, "blow", "process_source", json!({"url": url, "clips": [{"start_ms": 4, "end_ms": 2}]})).await));
+        assert!(is_error(&call(base, "talks", "process_source", json!({"url": url})).await));
+        assert!(is_error(&call(base, "talks", "get_source_transcript", json!({"url": "https://youtube.com/watch?v=../../x"})).await));
+        assert!(is_error(&call(base, "talks", "process_source", json!({"url": url, "clips": [{"start_ms": 4, "end_ms": 2}]})).await));
         blue_source(&source);
         let selection = json!({
             "title": "An editorial choice",
@@ -319,41 +319,41 @@ fn agent_reads_full_source_and_submits_renderable_selections() {
             with(json!({"annotations": [opening.clone()]})),
             with(json!({"annotations": question})),
         ] {
-            assert!(is_error(&call(base, "blow", "process_source", json!({"url": url, "clips": [bad]})).await));
+            assert!(is_error(&call(base, "talks", "process_source", json!({"url": url, "clips": [bad]})).await));
         }
-        let before = data(&call(base, "blow", "list_queue", json!({})).await);
-        let beyond = data(&call(base, "blow", "process_source", json!({"url": url, "clips": [with(json!({"end_ms": 800000}))]})).await);
-        assert_eq!(wait_job(base, "blow", &beyond).await["status"], "failed");
-        let rendered = data(&call(base, "blow", "process_source", json!({"url": url, "clips": [selection.clone()]})).await);
-        let rendered = wait_job(base, "blow", &rendered).await;
+        let before = data(&call(base, "talks", "list_queue", json!({})).await);
+        let beyond = data(&call(base, "talks", "process_source", json!({"url": url, "clips": [with(json!({"end_ms": 800000}))]})).await);
+        assert_eq!(wait_job(base, "talks", &beyond).await["status"], "failed");
+        let rendered = data(&call(base, "talks", "process_source", json!({"url": url, "clips": [selection.clone()]})).await);
+        let rendered = wait_job(base, "talks", &rendered).await;
         assert_eq!(rendered["status"], "succeeded", "{rendered}");
-        let listed = data(&call(base, "blow", "list_queue", json!({})).await);
+        let listed = data(&call(base, "talks", "list_queue", json!({})).await);
         assert_eq!(listed.as_array().unwrap().len(), before.as_array().unwrap().len() + 1);
         assert_eq!(listed[0]["title"], selection["title"]);
         assert_eq!(listed[0]["description"], selection["description"]);
-        let clip = root.path().join("channels/blow/clips/ccccccccccc-01/video.mp4");
+        let clip = root.path().join("channels/talks/clips/ccccccccccc-01/video.mp4");
         let duration: f64 = ffprobe_json(&clip, &["-show_entries", "format=duration"])["format"]["duration"].as_str().unwrap().parse().unwrap();
         assert!((duration - 480.0).abs() < 0.05);
 
         // A retry reuses the saved choices and export, without duplication.
         blue_source(&source);
-        let resumed = wait_job(base, "blow", &data(&call(base, "blow", "process_source", json!({"url": url})).await)).await;
+        let resumed = wait_job(base, "talks", &data(&call(base, "talks", "process_source", json!({"url": url})).await)).await;
         assert_eq!(resumed["status"], "succeeded", "{resumed}");
-        assert_eq!(data(&call(base, "blow", "list_queue", json!({})).await), listed);
-        let changed = data(&call(base, "blow", "process_source", json!({"url": url, "clips": [with(json!({"end_ms": 600000}))]})).await);
-        assert_eq!(wait_job(base, "blow", &changed).await["status"], "failed");
-        assert_eq!(data(&call(base, "blow", "list_queue", json!({})).await), listed);
+        assert_eq!(data(&call(base, "talks", "list_queue", json!({})).await), listed);
+        let changed = data(&call(base, "talks", "process_source", json!({"url": url, "clips": [with(json!({"end_ms": 600000}))]})).await);
+        assert_eq!(wait_job(base, "talks", &changed).await["status"], "failed");
+        assert_eq!(data(&call(base, "talks", "list_queue", json!({})).await), listed);
 
         // Re-edit a pending export, preserving its full eight minutes.
         blue_source(&source);
         let attribution = json!({"name": "Fixture revised", "streamed_on": "2020-01-02", "evidence": "Fixture metadata"});
-        let edit = data(&call(base, "blow", "edit_video", json!({"clip_id": "ccccccccccc:01", "source": attribution})).await);
-        let edited = wait_job(base, "blow", &edit).await;
+        let edit = data(&call(base, "talks", "edit_video", json!({"clip_id": "ccccccccccc:01", "source": attribution})).await);
+        let edited = wait_job(base, "talks", &edit).await;
         assert_eq!(edited["status"], "succeeded", "{edited}");
-        let report = data(&call(base, "blow", "get_edit_report", json!({"clip_id": "ccccccccccc:01"})).await);
+        let report = data(&call(base, "talks", "get_edit_report", json!({"clip_id": "ccccccccccc:01"})).await);
         assert_eq!(report["report"]["duration_ms"], 480000);
         assert_eq!(report["report"]["source"]["name"], "Fixture revised");
-        let frame = image(&call(base, "blow", "inspect_clip_frame", json!({"clip_id": "ccccccccccc:01", "at_ms": 1000})).await);
+        let frame = image(&call(base, "talks", "inspect_clip_frame", json!({"clip_id": "ccccccccccc:01", "at_ms": 1000})).await);
         assert_eq!((frame.width(), frame.height()), (320, 180));
 
         // A source can explicitly produce nothing, without media or a
@@ -425,7 +425,7 @@ fn cli_edited_ranges_context_hold_and_resume() {
     let url = "https://youtube.com/watch?v=aaaaaaaaaaa";
     for attempt in 0..2 {
         std::fs::copy(&video, source.join("audio.mp4")).unwrap();
-        let mut args = vec!["process", "blow", url];
+        let mut args = vec!["process", "talks", url];
         if attempt == 0 {
             args.extend(["--clips", selections.to_str().unwrap()]);
         }
@@ -436,7 +436,7 @@ fn cli_edited_ranges_context_hold_and_resume() {
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    let clips = queue(&root, "blow");
+    let clips = queue(&root, "talks");
     assert_eq!(clips.len(), 1);
     assert_eq!(clips[0].duration_ms, 3500);
     let report = clips[0].edit_report.clone().unwrap();
@@ -449,7 +449,7 @@ fn cli_edited_ranges_context_hold_and_resume() {
     assert_eq!(report["annotations"][0]["evidence"], "Source transcript");
     let clip = root
         .path()
-        .join("channels/blow/clips/aaaaaaaaaaa-01/video.mp4");
+        .join("channels/talks/clips/aaaaaaaaaaa-01/video.mp4");
     // The content after the cut and the held frame, not just the duration.
     assert!(mean_abs_diff(&frame(&clip, 2.75), &frame(&video, 4.75)) < 8.0);
     assert!(mean_abs_diff(&frame(&clip, 2.2), &frame(&video, 1.0)) < 8.0);

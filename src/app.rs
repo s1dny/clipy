@@ -13,9 +13,10 @@ use crate::config::{ChannelConfig, Config};
 use crate::db::Db;
 
 pub struct App {
-    /// Channel media, credentials, headshots and the database.
+    /// Channel media, credentials, thumbnail templates, headshots and the
+    /// database.
     pub data: PathBuf,
-    /// Bundled read-only resources: thumbnails/, agent/ and site/.
+    /// Bundled read-only resources: the agent's prompts in agent/.
     pub home: PathBuf,
     pub config_path: PathBuf,
     pub db: Db,

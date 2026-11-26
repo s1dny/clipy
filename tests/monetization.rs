@@ -123,7 +123,7 @@ fn ads_write_requires_verified_readback_and_surfaces_authentication() {
     };
     let providers = providers(&runtime, handler);
     let root = Root::new(CONFIG.split("[channels.science]").next().unwrap());
-    root.token("blow");
+    root.token("talks");
     let port = free_port();
     let profile = root.path().join("browser");
     let _browser = Killed(
@@ -183,26 +183,26 @@ fn ads_write_requires_verified_readback_and_surfaces_authentication() {
     runtime.block_on(async {
         let read = json!({"endpoint": "creator/get_creator_videos", "payload": {
             "videoIds": ["owned-video"], "mask": {"videoId": true, "channelId": true, "monetization": {"all": true}}, "criticalRead": true}});
-        let first = call(base, "blow", "studio_api_request", read.clone()).await;
+        let first = call(base, "talks", "studio_api_request", read.clone()).await;
         let before = data(&first)["response"]["videos"][0].clone();
         assert!(before["monetization"]["adMonetization"]["userSetMonetization"].as_str().unwrap().ends_with("_OFF"));
         let write = json!({"endpoint": "video_manager/metadata_update",
             "payload": {"encryptedVideoId": "owned-video", "monetizationSettings": {"newMonetizeWithAds": true}},
             "observation": before});
         state.lock().unwrap().challenge = true;
-        let failure = call(base, "blow", "studio_api_request", write.clone()).await;
+        let failure = call(base, "talks", "studio_api_request", write.clone()).await;
         assert!(is_error(&failure) && text(&failure).contains("challenge"), "{}", text(&failure));
         assert_eq!(state.lock().unwrap().writes, 1);
         assert!(!state.lock().unwrap().ads_on);
         assert!(audits("unconfirmed").contains(&before));
-        assert!(!is_error(&call(base, "blow", "studio_api_request", read.clone()).await));
+        assert!(!is_error(&call(base, "talks", "studio_api_request", read.clone()).await));
         state.lock().unwrap().challenge = false;
-        data(&call(base, "blow", "studio_api_request", write.clone()).await);
-        let after = data(&call(base, "blow", "studio_api_request", read).await)["response"]["videos"][0].clone();
+        data(&call(base, "talks", "studio_api_request", write.clone()).await);
+        let after = data(&call(base, "talks", "studio_api_request", read).await)["response"]["videos"][0].clone();
         assert_eq!(after["monetization"]["adMonetization"]["effectiveStatus"], "VIDEO_MONETIZING_STATUS_MONETIZING");
         let mut foreign = write.clone();
         foreign["payload"]["encryptedVideoId"] = "another-video".into();
-        let denied = call(base, "blow", "studio_api_request", foreign).await;
+        let denied = call(base, "talks", "studio_api_request", foreign).await;
         assert!(is_error(&denied));
         assert_eq!(state.lock().unwrap().writes, 2);
     });
