@@ -63,14 +63,13 @@ fn fill(image: &mut RgbaImage, left: i64, top: i64, right: i64, bottom: i64, col
     imageproc::drawing::draw_filled_rect_mut(image, rect, Rgba(color));
 }
 
-/// Draw one card as a full-frame transparent PNG at `path`.
+/// Draw one card on a full-frame transparent image.
 pub fn card(
     card: &Annotation,
     art: Option<DynamicImage>,
     width: u32,
     height: u32,
-    path: &Path,
-) -> Result<()> {
+) -> Result<RgbaImage> {
     let (w, h) = (width as f64, height as f64);
     let size = round(h * 0.025).max(10) as u32;
     let font = Face::new(false, size);
@@ -173,14 +172,12 @@ pub fn card(
         let y = top + pad + ((art_height.max(box_height - 2 * pad)) - art.height() as i64) / 2;
         image::imageops::overlay(&mut image, &art, left + pad, y);
     }
-    image
-        .save(path)
-        .with_context(|| format!("save {}", path.display()))?;
-    Ok(())
+    Ok(image)
 }
 
-/// The persistent "21 July 2024 · Source" marker in the top right.
-pub fn source_bug(source: &SourceAttribution, width: u32, height: u32, path: &Path) -> Result<()> {
+/// The persistent "21 July 2024 · Source" marker in the top right, on a
+/// full-frame transparent image.
+pub fn source_bug(source: &SourceAttribution, width: u32, height: u32) -> Result<RgbaImage> {
     let (w, h) = (width as f64, height as f64);
     let font = Face::new(true, round(h * 0.021).max(9) as u32);
     let text = format!(
@@ -212,10 +209,7 @@ pub fn source_bug(source: &SourceAttribution, width: u32, height: u32, path: &Pa
         [255, 255, 255],
         &text,
     );
-    image
-        .save(path)
-        .with_context(|| format!("save {}", path.display()))?;
-    Ok(())
+    Ok(image)
 }
 
 /// Download an image (at most 10 MB) with its EXIF orientation applied.

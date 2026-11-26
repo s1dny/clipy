@@ -255,8 +255,7 @@ pub async fn render(
         let window = Some((card.start_ms, card.end_ms));
         let (card, target) = (card.clone(), path.clone());
         let origin = tokio::task::spawn_blocking(move || {
-            cards::card(&card, art, width, height, &target)?;
-            crop_to_content(&target)
+            save_cropped(cards::card(&card, art, width, height)?, &target)
         })
         .await??;
         overlay(&mut command, &path, origin, window, format!("card{i}"));
@@ -265,8 +264,7 @@ pub async fn render(
         let path = work.path().join("source.png");
         let (source, target) = (source.clone(), path.clone());
         let origin = tokio::task::spawn_blocking(move || {
-            cards::source_bug(&source, width, height, &target)?;
-            crop_to_content(&target)
+            save_cropped(cards::source_bug(&source, width, height)?, &target)
         })
         .await??;
         overlay(&mut command, &path, origin, None, "attributed".into());
@@ -312,10 +310,9 @@ pub async fn verify(path: &Path, duration_ms: i64) -> Result<Value> {
     Ok(json!({ "duration_seconds": actual, "audio_and_video": true }))
 }
 
-/// Crop a full-frame overlay to its visible pixels and return where they
-/// sit, so each frame blends a small box instead of a whole frame.
-fn crop_to_content(path: &Path) -> Result<(u32, u32)> {
-    let image = image::open(path)?.into_rgba8();
+/// Save a full-frame overlay cropped to its visible pixels and return where
+/// they sit, so each frame blends a small box instead of a whole frame.
+fn save_cropped(image: image::RgbaImage, path: &Path) -> Result<(u32, u32)> {
     let (mut left, mut top, mut right, mut bottom) = (u32::MAX, u32::MAX, 0, 0);
     for (x, y, pixel) in image.enumerate_pixels() {
         if pixel[3] > 0 {
